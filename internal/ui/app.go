@@ -221,6 +221,7 @@ func (m AppModel) renderTopBar() string {
 	appName := lipgloss.NewStyle().
 		Foreground(appColorPrimary).
 		Bold(true).
+		Padding(0, 1).
 		Render("⏱  timetui")
 
 	// ── tabs (center) ─────────────────────────────────────────────────────────
@@ -275,6 +276,7 @@ func (m AppModel) renderTimerStr() string {
 	if m.running == nil {
 		return lipgloss.NewStyle().
 			Foreground(appColorSubtle).
+			Padding(0, 1).
 			Render("● idle")
 	}
 
