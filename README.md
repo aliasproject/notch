@@ -273,7 +273,7 @@ notch/
     ├── db/
     │   └── db.go              # SQLite persistence (modernc.org/sqlite, pure Go)
     ├── theme/
-    │   └── theme.go           # Color palette, theme.conf loading, live reload
+    │   └── theme.go           # Color palette: OS theme sync, theme.conf overrides, live reload
     ├── status/
     │   └── status.go          # `notch status` output formatting (text/JSON)
     └── ui/
