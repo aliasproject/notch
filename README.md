@@ -1,4 +1,4 @@
-# ⏱ TimeTUI
+# Notch.
 
 A fast, beautiful terminal UI for tracking time — built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lip Gloss](https://github.com/charmbracelet/lipgloss), and a pure-Go SQLite backend.
 
