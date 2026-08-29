@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/maguiard/timetui/internal/model"
+	"github.com/aliasproject/notch/internal/model"
 	_ "modernc.org/sqlite"
 )
 
@@ -278,7 +278,7 @@ func (d *DB) GetRunningEntry() (*model.Entry, error) {
          JOIN projects p ON p.id = e.project_id
          JOIN clients  c ON c.id = p.client_id
          WHERE e.end_time IS NULL
-         ORDER BY e.start_time DESC LIMIT 1`)
+         ORDER BY e.start_time DESC, e.id DESC LIMIT 1`)
 	if err != nil {
 		return nil, err
 	}
@@ -317,7 +317,7 @@ func (d *DB) ListEntries(projectID int64, dateFrom, dateTo string, includeRunnin
 	if !includeRunning {
 		q += ` AND e.end_time IS NOT NULL`
 	}
-	q += ` ORDER BY e.start_time DESC`
+	q += ` ORDER BY e.start_time DESC, e.id DESC`
 	rows, err := d.sql.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -343,16 +343,16 @@ func (d *DB) SetEntryPaid(id int64, paid bool) error {
 // ReportByProject returns aggregated hours/earnings grouped by client + project,
 // with individual entries attached to each row for drill-down display.
 func (d *DB) ReportByProject(dateFrom, dateTo string) ([]*model.ReportRow, error) {
-	q := `SELECT c.id, c.name, c.hourly_rate,
-                 p.id, p.name,
+	q := `SELECT c.id, p.id, c.name, p.name,
                  SUM((JULIANDAY(COALESCE(e.end_time, CURRENT_TIMESTAMP)) - JULIANDAY(e.start_time)) * 24) AS hours,
                  COUNT(*) AS entry_count,
                  SUM(CASE WHEN e.invoiced=1 THEN 1 ELSE 0 END) AS invoiced,
-                 SUM(CASE WHEN e.paid=1 THEN 1 ELSE 0 END) AS paid
+                 SUM(CASE WHEN e.paid=1 THEN 1 ELSE 0 END) AS paid,
+                 c.hourly_rate
           FROM entries e
           JOIN projects p ON p.id = e.project_id
           JOIN clients  c ON c.id = p.client_id
-          WHERE 1=1`
+          WHERE e.end_time IS NOT NULL`
 	args := []interface{}{}
 	if dateFrom != "" {
 		q += ` AND date(e.start_time)>=?`
@@ -373,35 +373,14 @@ func (d *DB) ReportByProject(dateFrom, dateTo string) ([]*model.ReportRow, error
 	var report []*model.ReportRow
 	for rows.Next() {
 		r := &model.ReportRow{}
-		if err := rows.Scan(
-			&r.ClientID, &r.ClientName, &r.HourlyRate,
-			&r.ProjectID, &r.ProjectName,
-			&r.TotalHours, &r.EntryCount, &r.Invoiced, &r.Paid,
-		); err != nil {
+		if err := rows.Scan(&r.ClientID, &r.ProjectID, &r.ClientName, &r.ProjectName, &r.TotalHours,
+			&r.EntryCount, &r.Invoiced, &r.Paid, &r.HourlyRate); err != nil {
 			return nil, err
 		}
 		r.Earnings = r.TotalHours * r.HourlyRate
 		report = append(report, r)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	// Attach individual entries to each report row
-	allEntries, err := d.ListEntries(0, dateFrom, dateTo, false)
-	if err != nil {
-		return nil, err
-	}
-	// Index entries by project ID
-	byProject := make(map[int64][]*model.Entry, len(allEntries))
-	for _, e := range allEntries {
-		byProject[e.ProjectID] = append(byProject[e.ProjectID], e)
-	}
-	for _, r := range report {
-		r.Entries = byProject[r.ProjectID]
-	}
-
-	return report, nil
+	return report, rows.Err()
 }
 
 // -- helpers ------------------------------------------------------------------

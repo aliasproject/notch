@@ -5,12 +5,12 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/aliasproject/notch/internal/db"
+	"github.com/aliasproject/notch/internal/model"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/maguiard/timetui/internal/db"
-	"github.com/maguiard/timetui/internal/model"
 )
 
 // ClientsModel manages the Clients tab.
@@ -58,6 +58,19 @@ func (m ClientsModel) Init() tea.Cmd {
 // and should receive all keystrokes before the root app handles them.
 func (m ClientsModel) IsBusy() bool {
 	return m.mode != clientModeList
+}
+
+// Help returns the contextual hotkey string for the view's current mode, for
+// display in the app-level hotkey bar (see app.go renderHotkeyBar).
+func (m ClientsModel) Help() []Hotkey {
+	switch m.mode {
+	case clientModeForm:
+		return []Hotkey{{"tab / shift+tab", "move"}, {"enter", "save"}, {"esc", "cancel"}}
+	case clientModeConfirmDelete:
+		return []Hotkey{{"y", "confirm"}, {"esc", "cancel"}}
+	default:
+		return []Hotkey{{"n", "new"}, {"e", "edit"}, {"d", "delete"}, {"↑ / ↓", "navigate"}}
+	}
 }
 
 func (m *ClientsModel) SetSize(w, h int) {
@@ -158,7 +171,7 @@ func (m ClientsModel) updateConfirm(msg tea.KeyMsg) (ClientsModel, tea.Cmd) {
 		m.mode = clientModeList
 		return m, tea.Batch(
 			loadClientsCmd(m.db),
-			loadProjectsCmd(m.db, 0),
+			loadProjectsData(m.db),
 			StatusCmd("Client deleted."),
 		)
 	default:
@@ -246,6 +259,18 @@ func (m ClientsModel) View() string {
 	}
 }
 
+// listColWidths returns the NAME and HOURLY RATE column widths so the list
+// spans the full available content width.
+func (m ClientsModel) listColWidths() (nameCol, rateCol int) {
+	avail := usableWidth(m.width) - 2
+	rateCol = 18
+	nameCol = avail - rateCol
+	if nameCol < 24 {
+		nameCol = 24
+	}
+	return nameCol, rateCol
+}
+
 func (m ClientsModel) viewList() string {
 	var sb strings.Builder
 
@@ -258,18 +283,19 @@ func (m ClientsModel) viewList() string {
 	}
 
 	// header — Padding(0,1) is on StyleTableHeader so each cell gets 1 space each side
+	nameCol, rateCol := m.listColWidths()
 	sb.WriteString(
 		RowPrefix(false) +
-			StyleTableHeader.Width(30).Render("NAME") +
-			StyleTableHeader.Width(18).Render("HOURLY RATE") +
+			StyleTableHeader.Width(nameCol).Render("Name") +
+			StyleTableHeader.Width(rateCol).Align(lipgloss.Right).Render("Hourly Rate") +
 			"\n",
 	)
-	sb.WriteString(StyleTableDiv.Render(strings.Repeat("─", 52)) + "\n")
+	sb.WriteString(StyleTableDiv.Render(strings.Repeat("─", usableWidth(m.width))) + "\n")
 
 	for i, c := range m.clients {
 		sel := i == m.cursor
 		prefix := RowPrefix(sel)
-		name := truncate(c.Name, 27)
+		name := truncate(c.Name, nameCol-3)
 		rate := fmt.Sprintf("$%.2f / hr", c.HourlyRate)
 
 		var s lipgloss.Style
@@ -279,10 +305,9 @@ func (m ClientsModel) viewList() string {
 			s = StyleTableRow
 		}
 
-		sb.WriteString(prefix + s.Width(30).Render(name) + s.Width(18).Render(rate) + "\n")
+		sb.WriteString(prefix + s.Width(nameCol).Render(name) + s.Width(rateCol).Align(lipgloss.Right).Render(rate) + "\n")
 	}
 
-	sb.WriteString("\n" + StyleHelp.Render("n new  ·  e edit  ·  d delete  ·  ↑/↓ navigate"))
 	return sb.String()
 }
 
@@ -297,6 +322,7 @@ func (m ClientsModel) viewForm() string {
 
 	labels := []string{"Name", "Hourly Rate ($)"}
 	for i, inp := range m.inputs {
+		refreshInputStyle(&inp)
 		focused := i == m.focusIdx
 		var label lipgloss.Style
 		var inputStyle lipgloss.Style
@@ -307,20 +333,15 @@ func (m ClientsModel) viewForm() string {
 			label = StyleFormLabel
 			inputStyle = StyleFormInput
 		}
-		sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Center, label.Render(labels[i]), inputStyle.Render(inp.View())) + "\n\n")
+		sb.WriteString(lipgloss.JoinHorizontal(lipgloss.Top, padCellToTwoLines(label.Render(labels[i])), inputStyle.Render(inp.View())) + "\n\n")
 	}
 
 	if m.formErr != "" {
 		sb.WriteString(StyleDanger.Render("✖  "+m.formErr) + "\n\n")
 	}
 
-	if m.focusIdx == clientFieldCount-1 {
-		sb.WriteString(StyleButtonActive.Render("  Save  "))
-	} else {
-		sb.WriteString(StyleButtonPrimary.Render("  Save  "))
-	}
-	sb.WriteString("  " + StyleButton.Render("  Cancel  "))
-	sb.WriteString("\n\n" + StyleHelp.Render("tab / shift+tab  ·  enter save  ·  esc cancel"))
+	sb.WriteString(StyleButtonPrimary.Render("Save"))
+	sb.WriteString("  " + StyleButton.Render("Cancel"))
 
 	return sb.String()
 }
@@ -330,13 +351,10 @@ func (m ClientsModel) viewConfirm() string {
 		return ""
 	}
 	c := m.clients[m.cursor]
-	return lipgloss.JoinVertical(lipgloss.Left,
-		StyleDanger.Bold(true).Render("Delete \""+c.Name+"\"?"),
-		"",
-		StyleMuted.Render("All projects and time entries for this client will also be deleted."),
-		"",
-		StyleHelp.Render("y  confirm    esc  cancel"),
-	)
+	// Plain "\n" join, not lipgloss.JoinVertical — see renderConfirmDelete in common.go.
+	return StyleDanger.Bold(true).Render("Delete \""+c.Name+"\"?") + "\n\n" +
+		StyleMuted.Render("All projects and time entries for this client will also be deleted.") + "\n\n" +
+		StyleHelp.Render("y  confirm    esc  cancel")
 }
 
 // padRight pads s with spaces to the given width (rune-aware).

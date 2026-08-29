@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # Notch.
+=======
+# Notch
+>>>>>>> 7f8f3a6 (Theme support, new colors, new name)
 
 A fast, beautiful terminal UI for tracking time — built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lip Gloss](https://github.com/charmbracelet/lipgloss), and a pure-Go SQLite backend.
 
@@ -8,8 +12,8 @@ Track time entries, manage clients and projects, set billing rates, mark work as
 
 ## Features
 
-- **Timer tracking** — start/stop timers on tasks, see live elapsed time in the header
-- **Clients & Projects** — full CRUD with a two-pane browser
+- **Timer tracking** — start/stop timers on tasks, see the live elapsed time in the bottom status bar
+- **Clients & Projects** — full CRUD, clients on their own tab with project management next door
 - **Billing rates** — set an hourly rate per client; earnings calculated automatically
 - **Invoice & payment tracking** — mark entries as invoiced and/or paid
 - **Reports** — aggregated hours, earnings, invoice status by project/client with quick date presets
@@ -23,37 +27,119 @@ Track time entries, manage clients and projects, set billing rates, mark work as
 ### From source
 
 ```sh
-git clone https://github.com/maguiard/timetui
-cd timetui
-go build -o timetui .
-sudo mv timetui /usr/local/bin/
+git clone https://github.com/aliasproject/notch
+cd notch
+go build -o notch .
+sudo mv notch /usr/local/bin/
 ```
 
 ### Requirements
 
-- Go 1.21+
+- Go 1.26+
 
 ---
 
 ## Usage
 
 ```sh
-timetui
+notch
 ```
 
-The database is stored at `~/.local/share/timetui/timetui.db` by default.  
-Override with the `TIMETUI_DB` environment variable:
+The database is stored at `~/.local/share/notch/notch.db` by default.  
+Override with the `NOTCH_DB` environment variable:
 
 ```sh
-TIMETUI_DB=/path/to/custom.db timetui
+NOTCH_DB=/path/to/custom.db notch
 ```
+
+---
+
+## Status bar integration
+
+`notch status` prints the currently-running timer (or nothing, if idle) to stdout and exits — no daemon required, it just reads the same database the TUI uses (respecting `NOTCH_DB`), so it works whether or not the TUI is currently open.
+
+```sh
+notch status         # plain text — for shell bars
+notch status -json   # JSON — for waybar
+```
+
+Plain text looks like `⏱ Build feature · 1:23:45` when a timer is running, and is empty when idle.
+
+### waybar
+
+```jsonc
+"custom/notch": {
+    "exec": "notch status -json",
+    "return-type": "json",
+    "interval": 5
+}
+```
+
+### Shell bars (tmux, i3blocks, dwm, ...)
+
+```sh
+# tmux.conf
+set -g status-right '#(notch status)'
+```
+
+```sh
+# i3blocks.conf
+[notch]
+command=notch status
+interval=5
+```
+
+```sh
+# dwm-style xsetroot loop
+while true; do
+    xsetroot -name "$(notch status)"
+    sleep 5
+done
+```
+
+---
+
+## Theming
+
+Notch's colors track your OS theme automatically, and can be further overridden by your own config file.
+
+### Live OS theme sync
+
+If aliasos's `~/.config/aliasos/current/theme/colors.toml` exists, Notch derives its palette from it and picks up theme switches within milliseconds (filesystem-watched, with a once-a-second poll as a fallback) — no restart needed. Different theme generations name their colors differently (some use `lighter_bg`, others `lighter_background`; minimal themes only define `background`/`foreground`/`accent`), so Notch tries several known key spellings per field and derives anything still missing, meaning any aliasos theme produces a complete, sensibly-ordered palette.
+
+On a machine with no aliasos theme file, Notch falls back to its built-in default palette (a pastel-on-dark blue theme).
+
+### Manual override
+
+Create `theme.conf` in your config directory — `$XDG_CONFIG_HOME/notch/theme.conf`, or `~/.config/notch/theme.conf` if `XDG_CONFIG_HOME` isn't set — to override individual colors regardless of OS theme:
+
+```
+# theme.conf — any line omitted keeps the current (OS-synced or built-in) color
+primary   = #91B0DE
+accent    = #9DC6E9
+success   = #99C2ED
+warning   = #A4CBF7
+danger    = #C79EA9
+text      = #C2D9E9
+dim       = #B7D2E5
+subtle    = #899EAC
+bg        = #0D171F
+bg_alt    = #252E35
+border    = #5F6468
+highlight = #AFCFFF
+```
+
+- Colors must be 6-digit hex (`#RRGGBB`). Unknown keys and invalid values are ignored; anything you don't set falls back to the OS-synced color (or the built-in default shown above, on a machine with no aliasos theme).
+- Lines starting with `#` are comments; blank lines are ignored.
+- Priority, highest wins: `theme.conf` override → live aliasos OS theme → built-in default.
+- Changes to either `theme.conf` or the OS theme are picked up automatically while Notch is running — no restart needed. Deleting `theme.conf` reverts to the OS-synced (or built-in) theme.
 
 ---
 
 ## Getting Started
 
 1. Press **3** to go to the **Clients** tab → press **n** to create a client and set a billing rate
-2. Press **2** to go to the **Projects** tab → press **n** to create a project under that client
+2. Press **2** to go to the **Projects** tab → press **n** to create a project, selecting its client from the dropdown
 3. Press **1** to go to the **Timers** tab → press **n** to start a new timer
 4. Press **space** to stop/restart a timer
 5. Press **4** to view **Reports**
@@ -97,15 +183,16 @@ TIMETUI_DB=/path/to/custom.db timetui
 
 ### Projects tab
 
-| Key       | Action                                                         |
-| --------- | -------------------------------------------------------------- |
-| `↑` / `k` | Move cursor up                                                 |
-| `↓` / `j` | Move cursor down                                               |
-| `tab`     | Switch focus between Clients pane and Projects pane            |
-| `n`       | New client (in Clients pane) or new project (in Projects pane) |
-| `e`       | Edit selected client or project                                |
-| `d`       | Delete selected client or project (prompts confirmation)       |
-| `esc`     | Cancel form                                                    |
+| Key       | Action                                         |
+| --------- | ---------------------------------------------- |
+| `↑` / `k` | Move cursor up                                 |
+| `↓` / `j` | Move cursor down                               |
+| `n`       | New project (pick a client from the dropdown)  |
+| `e`       | Edit selected project (rename / change client) |
+| `d`       | Delete selected project (prompts confirmation) |
+| `esc`     | Cancel form                                    |
+
+Clients are created and managed on the Clients tab (press **3**).
 
 ### Clients tab
 
@@ -178,20 +265,24 @@ Summary cards at the bottom show totals for the selected period:
 ## Project Structure
 
 ```
-timetui/
-├── main.go                    # Entrypoint, DB init, program launch
+notch/
+├── main.go                    # Entrypoint, DB init, program launch, `status` subcommand
 └── internal/
     ├── model/
     │   └── model.go           # Domain types: Client, Project, Entry, ReportRow
     ├── db/
     │   └── db.go              # SQLite persistence (modernc.org/sqlite, pure Go)
+    ├── theme/
+    │   └── theme.go           # Color palette, theme.conf loading, live reload
+    ├── status/
+    │   └── status.go          # `notch status` output formatting (text/JSON)
     └── ui/
         ├── app.go             # Root Bubble Tea model, tab router, header/footer
-        ├── styles.go          # Lip Gloss palette and shared styles
+        ├── styles.go          # Layout constants (content width, chrome rows)
         └── views/
             ├── common.go      # Shared types, messages, styles, key maps, helpers
             ├── timers.go      # Timers tab — list, start/stop, edit, invoice/pay
-            ├── projects.go    # Projects tab — two-pane client+project CRUD
+            ├── projects.go    # Projects tab — flat project list w/ client picker
             ├── clients.go     # Clients tab — client CRUD with billing rate
             └── reports.go     # Reports tab — date-filtered summary + cards
 ```
@@ -205,6 +296,7 @@ timetui/
 | `github.com/charmbracelet/bubbletea` | TUI framework (Elm architecture)        |
 | `github.com/charmbracelet/bubbles`   | Ready-made components (textinput, etc.) |
 | `github.com/charmbracelet/lipgloss`  | Terminal styling and layout             |
+| `github.com/fsnotify/fsnotify`       | Filesystem watching for live theme sync |
 | `modernc.org/sqlite`                 | Pure-Go SQLite (no CGo)                 |
 
 ---
