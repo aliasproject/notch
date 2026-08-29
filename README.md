@@ -1,8 +1,4 @@
-<<<<<<< HEAD
-# Notch.
-=======
 # Notch
->>>>>>> 7f8f3a6 (Theme support, new colors, new name)
 
 A fast, beautiful terminal UI for tracking time — built with [Bubble Tea](https://github.com/charmbracelet/bubbletea), [Lip Gloss](https://github.com/charmbracelet/lipgloss), and a pure-Go SQLite backend.
 
