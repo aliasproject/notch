@@ -50,67 +50,27 @@ NOTCH_DB=/path/to/custom.db notch
 
 ---
 
-## Status bar integration
+## Status output
 
-`notch status` prints the currently-running timer (or nothing, if idle) to stdout and exits — no daemon required, it just reads the same database the TUI uses (respecting `NOTCH_DB`), so it works whether or not the TUI is currently open.
+`notch status` prints the currently-running timer (or nothing, if idle) to stdout and exits — no daemon required, it just reads the same database the TUI uses (respecting `NOTCH_DB`), so it works whether or not the TUI is currently open. Useful for piping into a shell prompt, status bar, or any script that wants to know what's running right now.
 
 ```sh
-notch status         # plain text — for shell bars
-notch status -json   # JSON — for waybar
+notch status         # plain text
+notch status -json   # JSON
 ```
 
 Plain text looks like `⏱ Build feature · 1:23:45` when a timer is running, and is empty when idle.
-
-### waybar
-
-```jsonc
-"custom/notch": {
-    "exec": "notch status -json",
-    "return-type": "json",
-    "interval": 5
-}
-```
-
-### Shell bars (tmux, i3blocks, dwm, ...)
-
-```sh
-# tmux.conf
-set -g status-right '#(notch status)'
-```
-
-```sh
-# i3blocks.conf
-[notch]
-command=notch status
-interval=5
-```
-
-```sh
-# dwm-style xsetroot loop
-while true; do
-    xsetroot -name "$(notch status)"
-    sleep 5
-done
-```
 
 ---
 
 ## Theming
 
-Notch's colors track your OS theme automatically, and can be further overridden by your own config file.
+Notch's colors can be overridden by a config file.
 
-### Live OS theme sync
-
-If aliasos's `~/.config/aliasos/current/theme/colors.toml` exists, Notch derives its palette from it and picks up theme switches within milliseconds (filesystem-watched, with a once-a-second poll as a fallback) — no restart needed. Different theme generations name their colors differently (some use `lighter_bg`, others `lighter_background`; minimal themes only define `background`/`foreground`/`accent`), so Notch tries several known key spellings per field and derives anything still missing, meaning any aliasos theme produces a complete, sensibly-ordered palette.
-
-On a machine with no aliasos theme file, Notch falls back to its built-in default palette (a pastel-on-dark blue theme).
-
-### Manual override
-
-Create `theme.conf` in your config directory — `$XDG_CONFIG_HOME/notch/theme.conf`, or `~/.config/notch/theme.conf` if `XDG_CONFIG_HOME` isn't set — to override individual colors regardless of OS theme:
+Create `theme.conf` in your config directory — `$XDG_CONFIG_HOME/notch/theme.conf`, or `~/.config/notch/theme.conf` if `XDG_CONFIG_HOME` isn't set:
 
 ```
-# theme.conf — any line omitted keeps the current (OS-synced or built-in) color
+# theme.conf — any line omitted keeps the built-in default
 primary   = #91B0DE
 accent    = #9DC6E9
 success   = #99C2ED
@@ -125,10 +85,9 @@ border    = #5F6468
 highlight = #AFCFFF
 ```
 
-- Colors must be 6-digit hex (`#RRGGBB`). Unknown keys and invalid values are ignored; anything you don't set falls back to the OS-synced color (or the built-in default shown above, on a machine with no aliasos theme).
+- Colors must be 6-digit hex (`#RRGGBB`). Unknown keys and invalid values are ignored; anything you don't set falls back to the default shown above.
 - Lines starting with `#` are comments; blank lines are ignored.
-- Priority, highest wins: `theme.conf` override → live aliasos OS theme → built-in default.
-- Changes to either `theme.conf` or the OS theme are picked up automatically while Notch is running — no restart needed. Deleting `theme.conf` reverts to the OS-synced (or built-in) theme.
+- Changes are picked up automatically while Notch is running — no restart needed. Deleting the file reverts to the built-in default.
 
 ---
 
@@ -269,7 +228,7 @@ notch/
     ├── db/
     │   └── db.go              # SQLite persistence (modernc.org/sqlite, pure Go)
     ├── theme/
-    │   └── theme.go           # Color palette: OS theme sync, theme.conf overrides, live reload
+    │   └── theme.go           # Color palette, theme.conf loading, live reload
     ├── status/
     │   └── status.go          # `notch status` output formatting (text/JSON)
     └── ui/
@@ -292,7 +251,6 @@ notch/
 | `github.com/charmbracelet/bubbletea` | TUI framework (Elm architecture)        |
 | `github.com/charmbracelet/bubbles`   | Ready-made components (textinput, etc.) |
 | `github.com/charmbracelet/lipgloss`  | Terminal styling and layout             |
-| `github.com/fsnotify/fsnotify`       | Filesystem watching for live theme sync |
 | `modernc.org/sqlite`                 | Pure-Go SQLite (no CGo)                 |
 
 ---
