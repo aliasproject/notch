@@ -5,12 +5,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aliasproject/notch/internal/db"
+	"github.com/aliasproject/notch/internal/model"
+	"github.com/aliasproject/notch/internal/theme"
+	"github.com/aliasproject/notch/internal/ui/views"
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/maguiard/timetui/internal/db"
-	"github.com/maguiard/timetui/internal/model"
-	"github.com/maguiard/timetui/internal/ui/views"
 )
 
 // Tab indices
@@ -21,19 +22,46 @@ const (
 	TabReports  = 3
 )
 
+// hotkeySep separates hotkey chips in the hotkey bar.
+const hotkeySep = "   ·   "
+
+// hotkeyGlobal lists the hotkeys shown on every tab, appended after the
+// active view's contextual keys in the hotkey bar.
+var hotkeyGlobal = []views.Hotkey{{Key: "1-4", Label: "tabs"}, {Key: "q", Label: "quit"}}
+
 var tabNames = []string{"Timers", "Projects", "Clients", "Reports"}
 
-// palette mirrors views/common.go — keeps app.go self-contained
+// palette mirrors views/common.go's theme.Colors — kept as its own copy since
+// app.go's bars are self-contained (see renderTopBar/renderFooter/
+// renderHotkeyBar, which rebuild their lipgloss.Styles from these vars on
+// every render call, unlike views' cached Style* vars). refreshAppTheme keeps
+// this copy in sync with theme.Colors — called at init and again whenever
+// theme.CheckReload reports a change (see the TickMsg handler below).
 var (
-	appColorPrimary = lipgloss.Color("#7C3AED")
-	appColorGreen   = lipgloss.Color("#10B981")
-	appColorDim     = lipgloss.Color("#64748B")
-	appColorSubtle  = lipgloss.Color("#334155")
-	appColorText    = lipgloss.Color("#E2E8F0")
-	appColorBg      = lipgloss.Color("#0F172A")
-	appColorBgAlt   = lipgloss.Color("#1E293B")
-	appColorBorder  = lipgloss.Color("#1E293B")
+	appColorPrimary lipgloss.Color
+	appColorGreen   lipgloss.Color
+	appColorDanger  lipgloss.Color
+	appColorDim     lipgloss.Color
+	appColorSubtle  lipgloss.Color
+	appColorText    lipgloss.Color
+	appColorBg      lipgloss.Color
+	appColorBgAlt   lipgloss.Color
+	appColorBorder  lipgloss.Color
 )
+
+func init() { refreshAppTheme() }
+
+func refreshAppTheme() {
+	appColorPrimary = theme.Colors.Primary
+	appColorGreen = theme.Colors.Success
+	appColorDanger = theme.Colors.Danger
+	appColorDim = theme.Colors.Dim
+	appColorSubtle = theme.Colors.Subtle
+	appColorText = theme.Colors.Text
+	appColorBg = theme.Colors.Bg
+	appColorBgAlt = theme.Colors.BgAlt
+	appColorBorder = theme.Colors.Border
+}
 
 // TickMsg is sent every second to update the running timer display.
 type TickMsg time.Time
@@ -42,6 +70,30 @@ func tickCmd() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
 		return TickMsg(t)
 	})
+}
+
+// themeWatch fires whenever the OS theme or notch's theme.conf changes on
+// disk, so a theme switch is reflected within milliseconds rather than
+// waiting for TickMsg's once-a-second poll. Started once at package init;
+// nil if the filesystem watcher couldn't be set up, in which case TickMsg's
+// poll (still run every tick regardless) remains the only path.
+var themeWatch = theme.Watch()
+
+// themeWatchMsg is sent when themeWatch fires.
+type themeWatchMsg struct{}
+
+// watchThemeCmd waits on themeWatch and reports it as a themeWatchMsg.
+// Returns nil if there's no watcher to wait on.
+func watchThemeCmd() tea.Cmd {
+	if themeWatch == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		if _, ok := <-themeWatch; !ok {
+			return nil
+		}
+		return themeWatchMsg{}
+	}
 }
 
 // AppModel is the root Bubble Tea model.
@@ -96,6 +148,7 @@ func New(database *db.DB) (AppModel, error) {
 func (m AppModel) Init() tea.Cmd {
 	return tea.Batch(
 		tickCmd(),
+		watchThemeCmd(),
 		m.timers.Init(),
 		m.projects.Init(),
 		m.clients.Init(),
@@ -121,6 +174,17 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TickMsg:
 		cmds = append(cmds, tickCmd())
 		m.running, _ = m.db.GetRunningEntry()
+		if theme.CheckReload() {
+			refreshAppTheme()
+			views.RefreshTheme()
+		}
+
+	case themeWatchMsg:
+		cmds = append(cmds, watchThemeCmd())
+		if theme.CheckReload() {
+			refreshAppTheme()
+			views.RefreshTheme()
+		}
 
 	case tea.KeyMsg:
 		if !m.activeViewBusy() {
@@ -129,16 +193,16 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			case key.Matches(msg, appKeys.Tab1):
 				m.activeTab = TabTimers
-				return m, nil
+				return m, m.timers.Init()
 			case key.Matches(msg, appKeys.Tab2):
 				m.activeTab = TabProjects
-				return m, nil
+				return m, m.projects.Init()
 			case key.Matches(msg, appKeys.Tab3):
 				m.activeTab = TabClients
-				return m, nil
+				return m, m.clients.Init()
 			case key.Matches(msg, appKeys.Tab4):
 				m.activeTab = TabReports
-				return m, nil
+				return m, m.reports.Init()
 			}
 		}
 		if key.Matches(msg, appKeys.Quit) {
@@ -210,29 +274,43 @@ func (m AppModel) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left,
 		m.renderTopBar(),
 		m.renderBody(),
+		m.renderHotkeyBar(),
 		m.renderFooter(),
 	)
 }
 
-// renderTopBar renders a full-width bar with: app name | tabs centered | timer.
+// renderTopBar renders a full-width bar with: app name | tabs centered.
 // Keep it simple: build a plain string, then render it once in a styled container.
 func (m AppModel) renderTopBar() string {
+	// Every fragment below carries an explicit Background(appColorBgAlt): each
+	// .Render() call emits its own trailing SGR reset, so once fragments are
+	// concatenated into `line` and handed to the outer Background()-wrapped
+	// style, any fragment (or raw gap) without its own background would show
+	// the terminal's default background instead of the bar color.
+	barBg := lipgloss.NewStyle().Background(appColorBgAlt)
+
 	// ── app name (left) ───────────────────────────────────────────────────────
-	appName := lipgloss.NewStyle().
-		Foreground(appColorPrimary).
+	// Muted wordmark, no icon: accent color is reserved for things that are
+	// actually interactive (the active tab, buttons), and a clock glyph next
+	// to the name was more clutter than identity. appColorDim (the inactive
+	// tab color) reads as quieter/more minimal here than full-brightness
+	// appColorText, which in some themes is close enough to the active-tab
+	// color to compete with it for attention.
+	appName := barBg.
+		Foreground(appColorDim).
 		Bold(true).
 		Padding(0, 1).
-		Render("⏱  timetui")
+		Render("Notch")
 
 	// ── tabs (center) ─────────────────────────────────────────────────────────
-	activeSty := lipgloss.NewStyle().
+	activeSty := barBg.
 		Foreground(appColorText).
 		Bold(true).
 		Padding(0, 2)
-	inactiveSty := lipgloss.NewStyle().
+	inactiveSty := barBg.
 		Foreground(appColorDim).
 		Padding(0, 2)
-	sepSty := lipgloss.NewStyle().Foreground(appColorSubtle)
+	sepSty := barBg.Foreground(appColorSubtle)
 
 	var tabParts []string
 	for i, name := range tabNames {
@@ -244,23 +322,18 @@ func (m AppModel) renderTopBar() string {
 	}
 	tabRow := strings.Join(tabParts, sepSty.Render(" │ "))
 
-	// ── timer (right) ─────────────────────────────────────────────────────────
-	timerStr := m.renderTimerStr()
+	// ── layout: logo flush left, tabs centred on the full window width ───────
+	appW := lipgloss.Width(appName)
+	tabW := lipgloss.Width(tabRow)
 
-	// ── layout: pad so tabs are centred, timer is flush right ─────────────────
-	appW   := lipgloss.Width(appName)
-	tabW   := lipgloss.Width(tabRow)
-	timerW := lipgloss.Width(timerStr)
-
-	// Space available after the three fixed sections
-	space := m.width - appW - tabW - timerW
-	if space < 2 {
-		space = 2
+	// left of tabs = (m.width - tabW)/2; the logo occupies appW of that, so the
+	// gap between logo and tabs is that offset minus the logo width.
+	leftGap := (m.width-tabW)/2 - appW
+	if leftGap < 0 {
+		leftGap = 0
 	}
-	leftGap  := strings.Repeat(" ", space/2)
-	rightGap := strings.Repeat(" ", space-space/2)
 
-	line := appName + leftGap + tabRow + rightGap + timerStr
+	line := appName + barBg.Render(strings.Repeat(" ", leftGap)) + tabRow
 
 	// Render the whole line once inside the bar container (padding adds top/bottom rows)
 	return lipgloss.NewStyle().
@@ -271,31 +344,207 @@ func (m AppModel) renderTopBar() string {
 		Render(line)
 }
 
-// renderTimerStr returns a plain styled string for the timer chip — no outer padding.
-func (m AppModel) renderTimerStr() string {
+// renderHotkeyBar renders a full-width, fixed-position row of hotkeys: the
+// active view's contextual keys and the global app keys as a single centered
+// line. Unlike renderFooter, its content depends only on m.activeTab + that
+// view's current mode — never on transient state (errors/status/busy) — so
+// it never moves with content length and is never overwritten by a status
+// message.
+// hotkeyKeyCapStyle renders a hotkey's Key in a small boxed "cap" — a
+// background-filled rectangle — so it reads as a distinct button separate
+// from its plain-text label, the common hotkey-bar convention.
+func hotkeyKeyCapStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Bold(true).
+		Foreground(appColorText).
+		Background(appColorBgAlt).
+		Padding(0, 1)
+}
+
+// renderHotkeyChip renders one "[key] label" pair using capStyle for the
+// boxed key and appColorSubtle for the label.
+func renderHotkeyChip(h views.Hotkey, capStyle lipgloss.Style) string {
+	return capStyle.Render(h.Key) +
+		lipgloss.NewStyle().Background(appColorBg).Foreground(appColorSubtle).Render(" "+h.Label)
+}
+
+// hotkeyChipWidth returns the rendered width of h as drawn by renderHotkeyChip.
+func hotkeyChipWidth(h views.Hotkey) int {
+	return lipgloss.Width(h.Key) + 2 /* cap padding */ + 1 /* space */ + lipgloss.Width(h.Label)
+}
+
+func (m AppModel) renderHotkeyBar() string {
+	pad := 2
+	inner := max(10, m.width-pad*2)
+	capStyle := hotkeyKeyCapStyle()
+	sepStyle := lipgloss.NewStyle().Background(appColorBg).Foreground(appColorSubtle)
+
+	renderRow := func(hs []views.Hotkey) string {
+		parts := make([]string, len(hs))
+		for i, h := range hs {
+			parts[i] = renderHotkeyChip(h, capStyle)
+		}
+		return strings.Join(parts, sepStyle.Render(hotkeySep))
+	}
+
+	globalWidth := 0
+	for i, h := range hotkeyGlobal {
+		globalWidth += hotkeyChipWidth(h)
+		if i > 0 {
+			globalWidth += lipgloss.Width(hotkeySep)
+		}
+	}
+
+	// Context hotkeys are dropped wholesale (never mid-chip truncated) once
+	// they no longer fit, so a narrow terminal never cuts a key cap in half.
+	maxContext := max(0, inner-globalWidth-lipgloss.Width(hotkeySep))
+	var context []views.Hotkey
+	w := 0
+	for i, h := range m.activeViewHelp() {
+		cw := hotkeyChipWidth(h)
+		if i > 0 {
+			cw += lipgloss.Width(hotkeySep)
+		}
+		if w+cw > maxContext {
+			break
+		}
+		w += cw
+		context = append(context, h)
+	}
+
+	combined := renderRow(hotkeyGlobal)
+	if len(context) > 0 {
+		combined = renderRow(context) + sepStyle.Render(hotkeySep) + combined
+	}
+
+	return lipgloss.NewStyle().
+		Width(m.width).
+		Padding(1, pad).
+		// PaddingTop(1).
+		Align(lipgloss.Center).
+		Background(appColorBg).
+		Foreground(appColorSubtle).
+		Render(combined)
+}
+
+// renderFooter renders a full-width status bar: the running timer on the left,
+// errors/status/help on the right.
+func (m AppModel) renderFooter() string {
+	pad := 2
+	inner := m.width - pad*2
+	if inner < 10 {
+		inner = 10
+	}
+
+	rightBudget := 62
+	if inner-rightBudget < 20 {
+		rightBudget = inner / 3
+	}
+	if rightBudget < 10 {
+		rightBudget = 10
+	}
+
+	// Every fragment below carries an explicit Background(appColorBgAlt) for the
+	// same reason as renderTopBar: each .Render() ends with its own SGR reset,
+	// so an un-backgrounded fragment (or raw gap) would show the terminal's
+	// default background instead of the bar color once concatenated together.
+	barBg := lipgloss.NewStyle().Background(appColorBgAlt)
+
+	// ── left: running timer (or idle hint) ────────────────────────────────────
+	// The running box below has Padding(0, 2), so its "●" sits two columns in
+	// from its own left edge — the idle "●" gets the same two-column inset so
+	// the dot lands in the exact same spot either way.
+	var left string
 	if m.running == nil {
-		return lipgloss.NewStyle().
-			Foreground(appColorSubtle).
-			Padding(0, 1).
-			Render("● idle")
+		left = barBg.Render("  ") + barBg.Foreground(appColorSubtle).Render("●") +
+			barBg.Render("  ") + barBg.Foreground(appColorDim).Render("idle")
+	} else {
+		r := m.running
+		pill := lipgloss.NewStyle().
+			Background(appColorGreen).
+			Foreground(appColorBg).
+			Bold(true).
+			Padding(0, 2).
+			Render("●  " + model.FormatDuration(r.Duration()))
+		pillW := lipgloss.Width(pill)
+
+		leftBudget := inner - rightBudget - 2
+		if leftBudget < pillW {
+			leftBudget = pillW
+		}
+
+		taskMax := leftBudget - pillW - 4
+		if taskMax < 4 {
+			taskMax = 4
+		}
+		task := barBg.
+			Foreground(appColorText).
+			Bold(true).
+			Render(truncateStr(r.Task, taskMax))
+		left = pill + barBg.Render("  ") + task
+
+		if r.Project != nil {
+			rest := leftBudget - lipgloss.Width(left) - 2
+			if rest >= 6 {
+				left += barBg.Render("  ") + barBg.
+					Foreground(appColorDim).
+					Render(truncateStr(r.Project.Client.Name+" › "+r.Project.Name, rest))
+			}
+		}
 	}
 
-	dur  := model.FormatDuration(m.running.Duration())
-	task := truncateStr(m.running.Task, 28)
+	// ── right: error, status, or busy-mode hint ───────────────────────────────
+	// Hotkeys live in the dedicated bar rendered by renderHotkeyBar(), one row
+	// up — so when idle (no error/status, view not busy) this is intentionally
+	// blank rather than falling back to a generic hotkey list.
+	var rightText string
+	var rightStyle lipgloss.Style
+	switch {
+	case m.err != "":
+		rightText = "✖  " + m.err
+		rightStyle = barBg.Foreground(appColorDanger).Bold(true)
+	case m.statusMsg != "":
+		rightText = "✔  " + m.statusMsg
+		rightStyle = barBg.Foreground(appColorGreen).Bold(true)
+	case m.activeViewBusy():
+		rightText = "enter confirm  ·  esc cancel  ·  tab next field"
+		rightStyle = barBg.Foreground(appColorSubtle)
+	}
+	right := rightStyle.Render(truncateStr(rightText, rightBudget))
 
-	chip := lipgloss.NewStyle().Foreground(appColorGreen).Bold(true).Render("● "+dur) +
-		"  " +
-		lipgloss.NewStyle().Foreground(appColorText).Render(task)
-
-	if m.running.Project != nil {
-		p := m.running.Project.Client.Name + " › " + m.running.Project.Name
-		chip += "  " + lipgloss.NewStyle().Foreground(appColorDim).Render(truncateStr(p, 28))
+	lw := lipgloss.Width(left)
+	rw := lipgloss.Width(right)
+	gap := inner - lw - rw
+	if gap < 2 {
+		gap = 2
 	}
 
-	return chip
+	line := left + barBg.Render(strings.Repeat(" ", gap)) + right
+
+	// A top border visually separates this bar from the hotkey bar directly
+	// above it; BorderBackground must be set explicitly (it's a separate
+	// property from Background, see renderSummaryCards in reports.go for the
+	// same rule) or the border row shows the terminal's default background.
+	// Padding is asymmetric (top=0, bottom=1): the border row itself already
+	// reads as visual space above the content, so a symmetric Padding(1, pad)
+	// stacked on top of it made the gap above content look taller than the
+	// gap below. Dropping the top padding balances the two, and slims the bar
+	// by one row.
+	return lipgloss.NewStyle().
+		Background(appColorBgAlt).
+		Foreground(appColorDim).
+		Width(m.width).
+		// Border(lipgloss.NormalBorder(), true, false, false, false).
+		// BorderForeground(appColorSubtle).
+		// BorderBackground(appColorBgAlt).
+		Padding(1, pad).
+		Render(line)
 }
 
 func truncateStr(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
 	runes := []rune(s)
 	if len(runes) <= max {
 		return s
@@ -329,43 +578,35 @@ func (m AppModel) renderBody() string {
 		Padding(1, 3).
 		Render(view)
 
-	if pad == 0 {
+	// Skip gutters only when the column truly fills the whole row (m.width
+	// <= MaxContentWidth, so cw == m.width) — not just when pad == 0.
+	// ContentPad truncates (m.width-cw)/2, so it can floor to 0 even past
+	// MaxContentWidth (e.g. m.width=151, cw=150: a real 1-column leftover
+	// that still needs a gutter). Returning `column` alone on pad==0 skipped
+	// that leftover column entirely, same underlying mismatch as below but
+	// via this early return instead of the split.
+	if m.width == cw {
 		return column
 	}
 
-	// Gutters match the body background — no color blocks
-	gutter := lipgloss.NewStyle().
+	// Gutters match the body background — no color blocks. The right gutter
+	// gets the true remainder (m.width - cw - pad), not `pad` again: reusing
+	// the same truncated pad for both sides left the row 1 column short of
+	// m.width whenever (m.width - cw) is odd — a mismatch against the top
+	// bar/hotkey bar/footer, which all render at the full Width(m.width).
+	leftGutter := lipgloss.NewStyle().
 		Background(appColorBg).
 		Width(pad).
 		Height(ch).
 		Render("")
+	rightPad := m.width - cw - pad
+	rightGutter := lipgloss.NewStyle().
+		Background(appColorBg).
+		Width(rightPad).
+		Height(ch).
+		Render("")
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, gutter, column, gutter)
-}
-
-// renderFooter renders a minimal single-line status/help bar.
-func (m AppModel) renderFooter() string {
-	var center string
-	switch {
-	case m.err != "":
-		center = lipgloss.NewStyle().Foreground(lipgloss.Color("#EF4444")).Bold(true).Render("✖  " + m.err)
-	case m.statusMsg != "":
-		center = lipgloss.NewStyle().Foreground(lipgloss.Color("#10B981")).Bold(true).Render("✔  " + m.statusMsg)
-	default:
-		if m.activeViewBusy() {
-			center = lipgloss.NewStyle().Foreground(appColorSubtle).Render("enter confirm  ·  esc cancel  ·  tab next field")
-		} else {
-			center = lipgloss.NewStyle().Foreground(appColorSubtle).Render("1-4 tabs  ·  n new  ·  e edit  ·  d delete  ·  space start/stop  ·  q quit")
-		}
-	}
-
-	return lipgloss.NewStyle().
-		Background(appColorBgAlt).
-		Foreground(appColorDim).
-		Width(m.width).
-		Align(lipgloss.Center).
-		Padding(0, 2).
-		Render(center)
+	return lipgloss.JoinHorizontal(lipgloss.Top, leftGutter, column, rightGutter)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -384,9 +625,24 @@ func (m AppModel) activeViewBusy() bool {
 	return false
 }
 
+// activeViewHelp returns the active view's contextual hotkeys for its
+// current mode, mirroring the activeViewBusy() dispatch pattern.
+func (m AppModel) activeViewHelp() []views.Hotkey {
+	switch m.activeTab {
+	case TabTimers:
+		return m.timers.Help()
+	case TabProjects:
+		return m.projects.Help()
+	case TabClients:
+		return m.clients.Help()
+	case TabReports:
+		return m.reports.Help()
+	}
+	return nil
+}
+
 // contentDims returns the width and height of the centered content column.
-// The top bar is now 3 rows tall (1 pad + content + 1 pad) and the footer
-// is 1 row, so ChromeRows = 4. This is set in styles.go.
+// The chrome (top bar + banner + footer) height is set in styles.go.
 func (m AppModel) contentDims() (width, height int) {
 	return ContentWidth(m.width), m.height - ChromeRows
 }

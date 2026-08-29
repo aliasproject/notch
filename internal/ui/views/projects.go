@@ -4,57 +4,75 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aliasproject/notch/internal/db"
+	"github.com/aliasproject/notch/internal/model"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/maguiard/timetui/internal/db"
-	"github.com/maguiard/timetui/internal/model"
-)
-
-type projectsPane int
-
-const (
-	paneClientList projectsPane = iota
-	paneProjectList
 )
 
 type projectsMode int
 
 const (
 	projectsModeList projectsMode = iota
-	projectsModeNewClient
-	projectsModeEditClient
 	projectsModeNewProject
 	projectsModeEditProject
 	projectsModeConfirmDelete
 )
 
-type ProjectsModel struct {
-	db      *db.DB
-	width   int
-	height  int
-	focused projectsPane
-	mode    projectsMode
+// Project form field indices
+const (
+	projFieldClient = iota
+	projFieldName
+	projFieldCount
+)
 
-	clients        []*model.Client
-	projects       []*model.Project
-	clientCursor   int
-	projectCursor  int
+// listColWidths returns the PROJECT and CLIENT column widths so the list
+// spans the full available content width.
+func (m ProjectsModel) listColWidths() (nameCol, clientCol int) {
+	avail := usableWidth(m.width) - 2
+	clientCol = avail / 3
+	if clientCol < 18 {
+		clientCol = 18
+	}
+	if clientCol > 36 {
+		clientCol = 36
+	}
+	nameCol = avail - clientCol
+	if nameCol < 18 {
+		nameCol = 18
+	}
+	return nameCol, clientCol
+}
+
+type ProjectsModel struct {
+	db     *db.DB
+	width  int
+	height int
+	mode   projectsMode
+
+	clients  []*model.Client
+	projects []*model.Project
+	cursor   int
 
 	// form fields
-	inputs     []textinput.Model
+	inputs       []textinput.Model
 	focusedInput int
-	deleteTarget string
+	clientID     int64
 
-	err string
+	clientMatches  []dropdownItem
+	clientSel      int
+	showClientDrop bool
+
+	deleteTarget string
+	err          string
 }
 
 func NewProjects(database *db.DB) ProjectsModel {
 	return ProjectsModel{
-		db:      database,
-		focused: paneClientList,
-		mode:    projectsModeList,
+		db:   database,
+		mode: projectsModeList,
 	}
 }
 
@@ -62,6 +80,24 @@ func NewProjects(database *db.DB) ProjectsModel {
 // meaning global key shortcuts should not fire.
 func (m ProjectsModel) IsBusy() bool {
 	return m.mode != projectsModeList
+}
+
+// Help returns the contextual hotkey string for the view's current mode, for
+// display in the app-level hotkey bar (see app.go renderHotkeyBar).
+func (m ProjectsModel) Help() []Hotkey {
+	switch m.mode {
+	case projectsModeNewProject, projectsModeEditProject:
+		return []Hotkey{
+			{"tab / shift+tab", "move"},
+			{"↑ / ↓", "dropdown"},
+			{"enter", "save"},
+			{"esc", "cancel"},
+		}
+	case projectsModeConfirmDelete:
+		return []Hotkey{{"y", "confirm"}, {"esc", "cancel"}}
+	default:
+		return []Hotkey{{"n", "new"}, {"e", "edit"}, {"d", "delete"}}
+	}
 }
 
 func (m ProjectsModel) Init() tea.Cmd {
@@ -102,8 +138,8 @@ func (m ProjectsModel) Update(msg tea.Msg) (ProjectsModel, tea.Cmd) {
 	case projectsDataMsg:
 		m.clients = msg.clients
 		m.projects = msg.projects
-		if m.clientCursor >= len(m.clients) {
-			m.clientCursor = maxInt(0, len(m.clients)-1)
+		if m.cursor >= len(m.projects) && m.cursor > 0 {
+			m.cursor = len(m.projects) - 1
 		}
 		m.err = ""
 		return m, nil
@@ -119,90 +155,57 @@ func (m ProjectsModel) Update(msg tea.Msg) (ProjectsModel, tea.Cmd) {
 
 func (m ProjectsModel) updateList(msg tea.KeyMsg) (ProjectsModel, tea.Cmd) {
 	switch {
-	case key.Matches(msg, projectsKeys.SwitchPane):
-		if m.focused == paneClientList {
-			m.focused = paneProjectList
-		} else {
-			m.focused = paneClientList
-		}
-
 	case key.Matches(msg, projectsKeys.Up):
-		if m.focused == paneClientList {
-			if m.clientCursor > 0 {
-				m.clientCursor--
-			}
-		} else {
-			if m.projectCursor > 0 {
-				m.projectCursor--
-			}
+		if m.cursor > 0 {
+			m.cursor--
 		}
 
 	case key.Matches(msg, projectsKeys.Down):
-		if m.focused == paneClientList {
-			if m.clientCursor < len(m.clients)-1 {
-				m.clientCursor++
-			}
-		} else {
-			filtered := m.filteredProjects()
-			if m.projectCursor < len(filtered)-1 {
-				m.projectCursor++
-			}
+		if m.cursor < len(m.projects)-1 {
+			m.cursor++
 		}
 
 	case key.Matches(msg, projectsKeys.New):
-		if m.focused == paneClientList {
-			m.mode = projectsModeNewClient
-			m.inputs = makeClientInputs(nil)
-			m.focusedInput = 0
-			m.inputs[0].Focus()
-		} else {
-			if len(m.clients) == 0 {
-				m.err = "Create a client first"
-				return m, nil
-			}
-			m.mode = projectsModeNewProject
-			client := m.selectedClient()
-			m.inputs = makeProjectInputs(nil, client)
-			m.focusedInput = 0
-			m.inputs[0].Focus()
+		if len(m.clients) == 0 {
+			m.err = "Create a client first (press 3)"
+			return m, nil
 		}
+		m.mode = projectsModeNewProject
+		m.inputs = makeProjectInputs(nil, "")
+		m.clientID = 0
+		m.focusedInput = projFieldClient
+		m.inputs[projFieldClient].Focus()
+		m.rebuildClientMatches()
+		m.showClientDrop = len(m.clientMatches) > 0
+		m.err = ""
 
 	case key.Matches(msg, projectsKeys.Edit):
-		if m.focused == paneClientList {
-			if c := m.selectedClient(); c != nil {
-				m.mode = projectsModeEditClient
-				m.inputs = makeClientInputs(c)
-				m.focusedInput = 0
-				m.inputs[0].Focus()
+		if p := m.selectedProject(); p != nil {
+			clientName := ""
+			if p.Client != nil {
+				clientName = p.Client.Name
+				m.clientID = p.Client.ID
 			}
-		} else {
-			if p := m.selectedProject(); p != nil {
-				m.mode = projectsModeEditProject
-				m.inputs = makeProjectInputs(p, nil)
-				m.focusedInput = 0
-				m.inputs[0].Focus()
-			}
+			m.mode = projectsModeEditProject
+			m.inputs = makeProjectInputs(p, clientName)
+			m.focusedInput = projFieldClient
+			m.inputs[projFieldClient].Focus()
+			m.rebuildClientMatches()
+			m.showClientDrop = false
+			m.err = ""
 		}
 
 	case key.Matches(msg, projectsKeys.Delete):
-		if m.focused == paneClientList {
-			if c := m.selectedClient(); c != nil {
-				m.mode = projectsModeConfirmDelete
-				m.deleteTarget = fmt.Sprintf("client \"%s\" (and all its projects/entries)", c.Name)
-			}
-		} else {
-			if p := m.selectedProject(); p != nil {
-				m.mode = projectsModeConfirmDelete
-				m.deleteTarget = fmt.Sprintf("project \"%s\"", p.Name)
-			}
+		if p := m.selectedProject(); p != nil {
+			m.mode = projectsModeConfirmDelete
+			m.deleteTarget = fmt.Sprintf("project \"%s\"", p.Name)
 		}
 	}
 	return m, nil
 }
 
 func (m ProjectsModel) updateForm(msg tea.KeyMsg) (ProjectsModel, tea.Cmd) {
-	switch m.mode {
-	case projectsModeConfirmDelete:
+	if m.mode == projectsModeConfirmDelete {
 		switch msg.String() {
 		case "y", "Y":
 			return m.doDelete()
@@ -212,8 +215,34 @@ func (m ProjectsModel) updateForm(msg tea.KeyMsg) (ProjectsModel, tea.Cmd) {
 		return m, nil
 	}
 
+	// Client dropdown navigation while the client field is focused
+	if m.focusedInput == projFieldClient {
+		switch {
+		case msg.Type == tea.KeyUp:
+			if m.clientSel > 0 {
+				m.clientSel--
+			}
+			m.showClientDrop = true
+			return m, nil
+		case msg.Type == tea.KeyDown:
+			if m.clientSel < len(m.clientMatches)-1 {
+				m.clientSel++
+			}
+			m.showClientDrop = true
+			return m, nil
+		}
+	}
+
 	switch {
 	case key.Matches(msg, projectsKeys.Confirm):
+		if m.focusedInput == projFieldClient {
+			m.applyClientSelection()
+			m.inputs[projFieldClient].Blur()
+			m.focusedInput = projFieldName
+			m.inputs[projFieldName].Focus()
+			m.showClientDrop = false
+			return m, nil
+		}
 		return m.saveForm()
 
 	case key.Matches(msg, projectsKeys.Cancel):
@@ -223,73 +252,54 @@ func (m ProjectsModel) updateForm(msg tea.KeyMsg) (ProjectsModel, tea.Cmd) {
 
 	case key.Matches(msg, projectsKeys.NextField):
 		m.inputs[m.focusedInput].Blur()
-		m.focusedInput = (m.focusedInput + 1) % len(m.inputs)
+		if m.focusedInput == projFieldClient {
+			m.focusedInput = projFieldName
+		} else {
+			m.focusedInput = projFieldClient
+		}
 		m.inputs[m.focusedInput].Focus()
+		m.rebuildClientMatches()
+		m.showClientDrop = m.focusedInput == projFieldClient && len(m.clientMatches) > 0
+		return m, nil
 
 	case key.Matches(msg, projectsKeys.PrevField):
 		m.inputs[m.focusedInput].Blur()
-		m.focusedInput = (m.focusedInput - 1 + len(m.inputs)) % len(m.inputs)
+		if m.focusedInput == projFieldName {
+			m.focusedInput = projFieldClient
+		} else {
+			m.focusedInput = projFieldName
+		}
 		m.inputs[m.focusedInput].Focus()
+		m.rebuildClientMatches()
+		m.showClientDrop = m.focusedInput == projFieldClient && len(m.clientMatches) > 0
+		return m, nil
 
 	default:
 		var cmd tea.Cmd
 		m.inputs[m.focusedInput], cmd = m.inputs[m.focusedInput].Update(msg)
+		if m.focusedInput == projFieldClient {
+			m.clientID = 0
+			m.rebuildClientMatches()
+			m.showClientDrop = len(m.clientMatches) > 0
+		}
 		return m, cmd
 	}
-	return m, nil
 }
 
 func (m ProjectsModel) saveForm() (ProjectsModel, tea.Cmd) {
+	name := strings.TrimSpace(m.inputs[projFieldName].Value())
+	if name == "" {
+		m.err = "Name is required"
+		return m, nil
+	}
+	if err := m.resolveClientID(); err != nil {
+		m.err = err.Error()
+		return m, nil
+	}
+
 	switch m.mode {
-	case projectsModeNewClient:
-		name := strings.TrimSpace(m.inputs[0].Value())
-		rateStr := strings.TrimSpace(m.inputs[1].Value())
-		if name == "" {
-			m.err = "Name is required"
-			return m, nil
-		}
-		var rate float64
-		fmt.Sscanf(rateStr, "%f", &rate)
-		_, err := m.db.CreateClient(name, rate)
-		if err != nil {
-			m.err = err.Error()
-			return m, nil
-		}
-		m.mode = projectsModeList
-		return m, tea.Batch(loadProjectsData(m.db), StatusCmd("Client created"))
-
-	case projectsModeEditClient:
-		c := m.selectedClient()
-		if c == nil {
-			m.mode = projectsModeList
-			return m, nil
-		}
-		c.Name = strings.TrimSpace(m.inputs[0].Value())
-		rateStr := strings.TrimSpace(m.inputs[1].Value())
-		if c.Name == "" {
-			m.err = "Name is required"
-			return m, nil
-		}
-		fmt.Sscanf(rateStr, "%f", &c.HourlyRate)
-		if err := m.db.UpdateClient(c); err != nil {
-			m.err = err.Error()
-			return m, nil
-		}
-		m.mode = projectsModeList
-		return m, tea.Batch(loadProjectsData(m.db), StatusCmd("Client updated"))
-
 	case projectsModeNewProject:
-		name := strings.TrimSpace(m.inputs[0].Value())
-		if name == "" {
-			m.err = "Name is required"
-			return m, nil
-		}
-		client := m.selectedClient()
-		if client == nil {
-			m.err = "No client selected"
-			return m, nil
-		}
-		_, err := m.db.CreateProject(client.ID, name)
+		_, err := m.db.CreateProject(m.clientID, name)
 		if err != nil {
 			m.err = err.Error()
 			return m, nil
@@ -303,11 +313,8 @@ func (m ProjectsModel) saveForm() (ProjectsModel, tea.Cmd) {
 			m.mode = projectsModeList
 			return m, nil
 		}
-		p.Name = strings.TrimSpace(m.inputs[0].Value())
-		if p.Name == "" {
-			m.err = "Name is required"
-			return m, nil
-		}
+		p.ClientID = m.clientID
+		p.Name = name
 		if err := m.db.UpdateProject(p); err != nil {
 			m.err = err.Error()
 			return m, nil
@@ -320,28 +327,65 @@ func (m ProjectsModel) saveForm() (ProjectsModel, tea.Cmd) {
 
 func (m ProjectsModel) doDelete() (ProjectsModel, tea.Cmd) {
 	m.mode = projectsModeList
-	if m.focused == paneClientList {
-		if c := m.selectedClient(); c != nil {
-			if err := m.db.DeleteClient(c.ID); err != nil {
-				return m, ErrCmd(err.Error())
-			}
-			if m.clientCursor > 0 {
-				m.clientCursor--
-			}
-			return m, tea.Batch(loadProjectsData(m.db), StatusCmd("Client deleted"))
+	if p := m.selectedProject(); p != nil {
+		if err := m.db.DeleteProject(p.ID); err != nil {
+			return m, ErrCmd(err.Error())
 		}
-	} else {
-		if p := m.selectedProject(); p != nil {
-			if err := m.db.DeleteProject(p.ID); err != nil {
-				return m, ErrCmd(err.Error())
-			}
-			if m.projectCursor > 0 {
-				m.projectCursor--
-			}
-			return m, tea.Batch(loadProjectsData(m.db), StatusCmd("Project deleted"))
+		if m.cursor > 0 {
+			m.cursor--
 		}
+		return m, tea.Batch(loadProjectsData(m.db), StatusCmd("Project deleted"))
 	}
 	return m, nil
+}
+
+// resolveClientID resolves the client from the dropdown selection or the typed text.
+// It must match an existing client exactly.
+func (m *ProjectsModel) resolveClientID() error {
+	if m.clientID != 0 {
+		return nil
+	}
+	text := strings.TrimSpace(m.inputs[projFieldClient].Value())
+	if text == "" {
+		return fmt.Errorf("Select a client")
+	}
+	for _, c := range m.clients {
+		if strings.EqualFold(c.Name, text) {
+			m.clientID = c.ID
+			return nil
+		}
+	}
+	return fmt.Errorf("Select an existing client from the dropdown")
+}
+
+// rebuildClientMatches filters clients by the current client input text.
+func (m *ProjectsModel) rebuildClientMatches() {
+	query := strings.ToLower(strings.TrimSpace(m.inputs[projFieldClient].Value()))
+	m.clientMatches = nil
+	for _, c := range m.clients {
+		if query == "" || strings.Contains(strings.ToLower(c.Name), query) {
+			m.clientMatches = append(m.clientMatches, dropdownItem{id: c.ID, label: c.Name})
+		}
+	}
+	if m.clientSel >= len(m.clientMatches) {
+		m.clientSel = 0
+	}
+}
+
+// applyClientSelection commits the highlighted dropdown item to the client field.
+func (m *ProjectsModel) applyClientSelection() {
+	if len(m.clientMatches) == 0 {
+		return
+	}
+	item := m.clientMatches[m.clientSel]
+	m.clientID = item.id
+	for _, c := range m.clients {
+		if c.ID == item.id {
+			m.inputs[projFieldClient].SetValue(c.Name)
+			break
+		}
+	}
+	m.showClientDrop = false
 }
 
 // -- View ---------------------------------------------------------------------
@@ -351,113 +395,53 @@ func (m ProjectsModel) View() string {
 		return m.viewForm()
 	}
 
-	divW := 1
-	leftW := m.width/3
-	rightW := m.width - leftW - divW
+	var b strings.Builder
 
-	left := m.viewClientPane(leftW)
-	vdiv := lipgloss.NewStyle().Foreground(cBorder).Render(
-		strings.Repeat("\n│", strings.Count(left, "\n")+1),
-	)
-	right := m.viewProjectPane(rightW)
+	b.WriteString(StyleTitle.Render("Projects") + "\n\n")
 
-	panes := lipgloss.JoinHorizontal(lipgloss.Top, left, vdiv, right)
+	if len(m.projects) == 0 {
+		if len(m.clients) == 0 {
+			b.WriteString(StyleMuted.Render("No clients yet.  Create one on the Clients tab (press 3)."))
+		} else {
+			b.WriteString(StyleMuted.Render("No projects yet.  Press n to add one."))
+		}
+	} else {
+		nameCol, clientCol := m.listColWidths()
+		b.WriteString(RowPrefix(false) +
+			StyleTableHeader.Width(nameCol).Render("Project") +
+			StyleTableHeader.Width(clientCol).Render("Client") + "\n")
+		b.WriteString(StyleTableDiv.Render(strings.Repeat("─", usableWidth(m.width))) + "\n")
+
+		for i, p := range m.projects {
+			sel := i == m.cursor
+			name := truncate(p.Name, nameCol-3)
+			client := ""
+			if p.Client != nil {
+				client = truncate(p.Client.Name, clientCol-3)
+			}
+
+			row := RowPrefix(sel)
+			if sel {
+				row += StyleTableRowSel.Width(nameCol).Render(name)
+				// The client column keeps its own dim foreground even when
+				// selected (it's always secondary to the project name), but
+				// its background still needs to follow the row's cBgAlt
+				// tint — otherwise it'd leave a plain-cBg gap at the row's
+				// right edge.
+				row += StyleTableRowDim.Background(cBgAlt).Width(clientCol).Render(client)
+			} else {
+				row += StyleTableRow.Width(nameCol).Render(name)
+				row += StyleTableRowDim.Width(clientCol).Render(client)
+			}
+			b.WriteString(row + "\n")
+		}
+	}
 
 	if m.err != "" {
-		return lipgloss.JoinVertical(lipgloss.Left, panes, "", errStyle.Render("✖  "+m.err))
-	}
-	return panes
-}
-
-func (m ProjectsModel) viewClientPane(width int) string {
-	activeTitle := paneTitleStyle.Render("Clients")
-	inactiveTitle := paneDimStyle.Render("Clients")
-
-	var title string
-	if m.focused == paneClientList {
-		title = activeTitle
-	} else {
-		title = inactiveTitle
+		b.WriteString("\n\n" + StyleDanger.Render("✖  "+m.err))
 	}
 
-	divider := paneDivStyle.Render(strings.Repeat("─", width-2))
-
-	if len(m.clients) == 0 {
-		body := mutedStyle.Render("No clients yet.  Press n to add one.")
-		return lipgloss.JoinVertical(lipgloss.Left, title, divider, "", body)
-	}
-
-	rows := make([]string, len(m.clients))
-	for i, c := range m.clients {
-		sel := i == m.clientCursor
-		prefix := RowPrefix(sel)
-		name := truncate(c.Name, width-16)
-		rate := mutedStyle.Padding(0, 1).Render(fmt.Sprintf("$%.0f/h", c.HourlyRate))
-		var s lipgloss.Style
-		if sel {
-			s = selectedRowStyle
-		} else {
-			s = normalRowStyle
-		}
-		rows[i] = prefix + s.Render(name) + rate
-	}
-
-	hint := mutedStyle.Render("tab → projects  ·  n  e  d")
-	return lipgloss.JoinVertical(lipgloss.Left,
-		title, divider, "",
-		strings.Join(rows, "\n"),
-		"", hint,
-	)
-}
-
-func (m ProjectsModel) viewProjectPane(width int) string {
-	client := m.selectedClient()
-
-	var titleStr string
-	if client != nil {
-		titleStr = paneTitleStyle.Render("Projects") +
-			paneDimStyle.Render("  ·  "+client.Name)
-	} else {
-		if m.focused == paneProjectList {
-			titleStr = paneTitleStyle.Render("Projects")
-		} else {
-			titleStr = paneDimStyle.Render("Projects")
-		}
-	}
-
-	divider := paneDivStyle.Render(strings.Repeat("─", width-2))
-
-	filtered := m.filteredProjects()
-	if len(filtered) == 0 {
-		var body string
-		if client == nil {
-			body = mutedStyle.Render("Select a client on the left.")
-		} else {
-			body = mutedStyle.Render("No projects yet.  Press n to add one.")
-		}
-		return lipgloss.JoinVertical(lipgloss.Left, titleStr, divider, "", body)
-	}
-
-	rows := make([]string, len(filtered))
-	for i, p := range filtered {
-		sel := i == m.projectCursor
-		prefix := RowPrefix(sel)
-		name := truncate(p.Name, width-6)
-		var s lipgloss.Style
-		if sel {
-			s = selectedRowStyle
-		} else {
-			s = normalRowStyle
-		}
-		rows[i] = prefix + s.Render(name)
-	}
-
-	hint := mutedStyle.Render("n new  ·  e edit  ·  d del")
-	return lipgloss.JoinVertical(lipgloss.Left,
-		titleStr, divider, "",
-		strings.Join(rows, "\n"),
-		"", hint,
-	)
+	return b.String()
 }
 
 func (m ProjectsModel) viewForm() string {
@@ -465,166 +449,104 @@ func (m ProjectsModel) viewForm() string {
 		return renderConfirmDelete(m.deleteTarget, m.width)
 	}
 
-	var title string
-	switch m.mode {
-	case projectsModeNewClient:
-		title = "New Client"
-	case projectsModeEditClient:
-		title = "Edit Client"
-	case projectsModeNewProject:
-		title = "New Project"
-	case projectsModeEditProject:
+	title := "New Project"
+	if m.mode == projectsModeEditProject {
 		title = "Edit Project"
 	}
 
-	var fields []string
-	labels := formLabels(m.mode)
-	for i, inp := range m.inputs {
-		focused := i == m.focusedInput
-		var label string
-		if focused {
-			label = formLabelFocusedStyle.Render(labels[i])
-		} else {
-			label = formLabelStyle.Render(labels[i])
-		}
-		var inputStr string
-		if focused {
-			inputStr = formInputFocusedStyle.Render(inp.View())
-		} else {
-			inputStr = formInputStyle.Render(inp.View())
-		}
-		fields = append(fields, lipgloss.JoinHorizontal(lipgloss.Top, label, inputStr))
-	}
+	var b strings.Builder
+	b.WriteString(StyleTitle.Render(title) + "\n\n")
 
-	var errLine string
+	b.WriteString(m.renderField("Client", projFieldClient) + "\n")
+	if m.focusedInput == projFieldClient && m.showClientDrop && len(m.clientMatches) > 0 {
+		b.WriteString(renderDropdown(m.clientMatches, m.clientSel) + "\n")
+	}
+	b.WriteString("\n")
+	b.WriteString(m.renderField("Name", projFieldName) + "\n\n")
+
+	b.WriteString(StyleButtonPrimary.Render("Save"))
+	b.WriteString("   ")
+	b.WriteString(StyleButton.Render("Cancel"))
+	b.WriteString("\n\n")
+
 	if m.err != "" {
-		errLine = "\n" + errStyle.Render("✖  "+m.err)
+		b.WriteString(StyleDanger.Render("✖  "+m.err) + "\n\n")
 	}
 
-	help := mutedStyle.Render("tab / shift+tab  move  ·  enter save  ·  esc cancel")
-	body := lipgloss.JoinVertical(lipgloss.Left,
-		formTitleStyle.Render(title),
-		"",
-		strings.Join(fields, "\n\n"),
-		errLine,
-		"",
-		StyleButtonPrimary.Render("  Save  "),
-		"",
-		help,
-	)
+	return b.String()
+}
 
-	return body
+func (m ProjectsModel) renderField(label string, idx int) string {
+	focused := m.focusedInput == idx
+	ti := m.inputs[idx]
+	refreshInputStyle(&ti)
+
+	var labelStr string
+	if focused {
+		labelStr = StyleFormLabelFocused.Render(label)
+	} else {
+		labelStr = StyleFormLabel.Render(label)
+	}
+
+	var inputStr string
+	if focused {
+		inputStr = StyleFormInputFocused.Render(ti.View())
+	} else {
+		inputStr = StyleFormInput.Render(ti.View())
+	}
+
+	return lipgloss.JoinHorizontal(lipgloss.Top, labelStr, inputStr)
 }
 
 // -- helpers ------------------------------------------------------------------
 
-func (m ProjectsModel) selectedClient() *model.Client {
-	if len(m.clients) == 0 || m.clientCursor >= len(m.clients) {
-		return nil
-	}
-	return m.clients[m.clientCursor]
-}
-
 func (m ProjectsModel) selectedProject() *model.Project {
-	filtered := m.filteredProjects()
-	if len(filtered) == 0 || m.projectCursor >= len(filtered) {
+	if len(m.projects) == 0 || m.cursor >= len(m.projects) {
 		return nil
 	}
-	return filtered[m.projectCursor]
+	return m.projects[m.cursor]
 }
 
-func (m ProjectsModel) filteredProjects() []*model.Project {
-	client := m.selectedClient()
-	if client == nil {
-		return nil
-	}
-	var out []*model.Project
-	for _, p := range m.projects {
-		if p.ClientID == client.ID {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-func makeClientInputs(c *model.Client) []textinput.Model {
-	name := textinput.New()
-	name.Placeholder = "Client name"
-	name.CharLimit = 64
-	if c != nil {
-		name.SetValue(c.Name)
+func makeProjectInputs(p *model.Project, clientName string) []textinput.Model {
+	client := textinput.New()
+	client.Placeholder = "Select a client"
+	client.CharLimit = 64
+	if clientName != "" {
+		client.SetValue(clientName)
 	}
 
-	rate := textinput.New()
-	rate.Placeholder = "0.00"
-	rate.CharLimit = 10
-	if c != nil {
-		rate.SetValue(fmt.Sprintf("%.2f", c.HourlyRate))
-	}
-
-	return []textinput.Model{name, rate}
-}
-
-func makeProjectInputs(p *model.Project, _ *model.Client) []textinput.Model {
 	name := textinput.New()
 	name.Placeholder = "Project name"
 	name.CharLimit = 64
 	if p != nil {
 		name.SetValue(p.Name)
 	}
-	return []textinput.Model{name}
-}
 
-func formLabels(mode projectsMode) []string {
-	switch mode {
-	case projectsModeNewClient, projectsModeEditClient:
-		return []string{"Name:", "Hourly Rate ($):"}
-	default:
-		return []string{"Name:"}
-	}
+	return []textinput.Model{client, name}
 }
 
 // -- key map ------------------------------------------------------------------
 
 type projectsKeyMap struct {
-	Up          key.Binding
-	Down        key.Binding
-	SwitchPane  key.Binding
-	New         key.Binding
-	Edit        key.Binding
-	Delete      key.Binding
-	Confirm     key.Binding
-	Cancel      key.Binding
-	NextField   key.Binding
-	PrevField   key.Binding
+	Up        key.Binding
+	Down      key.Binding
+	New       key.Binding
+	Edit      key.Binding
+	Delete    key.Binding
+	Confirm   key.Binding
+	Cancel    key.Binding
+	NextField key.Binding
+	PrevField key.Binding
 }
 
 var projectsKeys = projectsKeyMap{
-	Up:         key.NewBinding(key.WithKeys("up", "k")),
-	Down:       key.NewBinding(key.WithKeys("down", "j")),
-	SwitchPane: key.NewBinding(key.WithKeys("tab")),
-	New:        key.NewBinding(key.WithKeys("n")),
-	Edit:       key.NewBinding(key.WithKeys("e")),
-	Delete:     key.NewBinding(key.WithKeys("d")),
-	Confirm:    key.NewBinding(key.WithKeys("enter")),
-	Cancel:     key.NewBinding(key.WithKeys("esc")),
-	NextField:  key.NewBinding(key.WithKeys("tab")),
-	PrevField:  key.NewBinding(key.WithKeys("shift+tab")),
+	Up:        key.NewBinding(key.WithKeys("up", "k")),
+	Down:      key.NewBinding(key.WithKeys("down", "j")),
+	New:       key.NewBinding(key.WithKeys("n")),
+	Edit:      key.NewBinding(key.WithKeys("e")),
+	Delete:    key.NewBinding(key.WithKeys("d")),
+	Confirm:   key.NewBinding(key.WithKeys("enter")),
+	Cancel:    key.NewBinding(key.WithKeys("esc")),
+	NextField: key.NewBinding(key.WithKeys("tab")),
+	PrevField: key.NewBinding(key.WithKeys("shift+tab")),
 }
-
-// -- local styles -------------------------------------------------------------
-
-var (
-	paneTitleStyle        = lipgloss.NewStyle().Foreground(cText).Bold(true)
-	paneDimStyle          = lipgloss.NewStyle().Foreground(cDim)
-	paneDivStyle          = lipgloss.NewStyle().Foreground(cBorder)
-	selectedRowStyle      = lipgloss.NewStyle().Foreground(cPrimary).Bold(true).Padding(0, 1)
-	normalRowStyle        = lipgloss.NewStyle().Foreground(cText).Padding(5, 5, 5)
-	mutedStyle            = lipgloss.NewStyle().Foreground(cDim)
-	errStyle              = lipgloss.NewStyle().Foreground(cRed)
-	formTitleStyle        = lipgloss.NewStyle().Foreground(cText).Bold(true)
-	formLabelStyle        = lipgloss.NewStyle().Foreground(cDim).Width(16)
-	formLabelFocusedStyle = lipgloss.NewStyle().Foreground(cAccent).Bold(true).Width(16)
-	formInputStyle        = lipgloss.NewStyle().Foreground(cText).Border(lipgloss.NormalBorder(), false, false, true, false).BorderForeground(cBorder).Width(40)
-	formInputFocusedStyle = lipgloss.NewStyle().Foreground(cText).Border(lipgloss.NormalBorder(), false, false, true, false).BorderForeground(cPrimary).Width(40)
-)
