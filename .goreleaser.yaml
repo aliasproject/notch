@@ -1,0 +1,47 @@
+version: 2
+
+project_name: notch
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: notch
+    main: .
+    binary: notch
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: notch
+    ids: [notch]
+    name_template: >-
+      {{ .Binary }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  github:
+    owner: aliasproject
+    name: notch

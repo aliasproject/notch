@@ -20,6 +20,12 @@ Track time entries, manage clients and projects, set billing rates, mark work as
 
 ## Installation
 
+```sh
+curl -fsSL https://raw.githubusercontent.com/aliasproject/notch/main/install.sh | sh
+```
+
+Downloads the latest [release](https://github.com/aliasproject/notch/releases) for your OS/arch and installs it to `/usr/local/bin` (or `~/.local/bin` if that isn't writable).
+
 ### From source
 
 ```sh

@@ -3,8 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Kairon — Terminal Time Tracking</title>
+<title>Notch — Terminal Time Tracking</title>
 <meta name="description" content="A fast, beautiful terminal UI for tracking time. Clients, projects, billing rates, invoicing, and reports — without leaving your terminal." />
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;0,600;1,400;1,500;1,600&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
 
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
@@ -12,276 +14,371 @@
     theme: {
       extend: {
         colors: {
-          primary: '#7C3AED',
-          accent: '#06B6D4',
-          success: '#10B981',
-          warning: '#F59E0B',
-          danger: '#EF4444',
-          ink: '#E2E8F0',
-          muted: '#64748B',
-          faint: '#334155',
-          bg: '#0F172A',
-          bgalt: '#1E293B',
-          line: '#1E293B',
-          highlight: '#A78BFA',
+          primary: '#91B0DE',
+          accent: '#9DC6E9',
+          success: '#99C2ED',
+          warning: '#A4CBF7',
+          danger: '#C79EA9',
+          ink: '#C2D9E9',
+          dim: '#B7D2E5',
+          subtle: '#899EAC',
+          bg: '#0D171F',
+          bgalt: '#252E35',
+          line: '#5F6468',
+          highlight: '#AFCFFF',
         },
         fontFamily: {
           sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Helvetica', 'Arial', 'sans-serif'],
-          mono: ['ui-monospace', '"JetBrains Mono"', '"Fira Code"', 'Menlo', 'Consolas', 'monospace'],
+          serif: ['Newsreader', 'Georgia', '"Times New Roman"', 'serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', '"Fira Code"', 'Menlo', 'Consolas', 'monospace'],
         },
       },
     },
   };
 </script>
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+
+<style>[x-cloak]{display:none!important;}</style>
 </head>
-<body class="bg-bg text-ink font-sans antialiased" x-data="landing()">
+<body class="bg-bg text-ink font-sans antialiased" x-data="site()" x-cloak @keydown.window="handleKey($event)">
 
-  <div class="min-h-screen">
+  <!-- Top accent bar -->
+  <div class="h-1 w-full" style="background:linear-gradient(90deg, #91B0DE, #AFCFFF, #99C2ED);"></div>
 
-    <!-- Nav -->
-    <nav class="sticky top-0 z-10 bg-[rgba(15,23,42,0.9)] backdrop-blur-md border-b border-line">
-      <div class="max-w-[1120px] mx-auto px-6 h-16 flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <span class="text-lg">⏱</span>
-          <span class="font-bold text-[15px]">Kairon</span>
-        </div>
+  <div class="lg:flex lg:items-start">
 
-        <div class="hidden sm:flex items-center gap-6">
-          <a class="text-muted hover:text-ink text-sm transition-colors" href="#features">Features</a>
-          <a class="text-muted hover:text-ink text-sm transition-colors" href="#theming">Theming</a>
-          <a class="text-muted hover:text-ink text-sm transition-colors" href="#status-bar">Status Bar</a>
-          <a class="inline-flex items-center justify-center rounded-md font-semibold text-sm px-5 py-2.5 whitespace-nowrap bg-primary text-ink hover:bg-highlight hover:text-bg transition-colors"
-             href="https://github.com/aliasproject/kairon" target="_blank" rel="noopener">View on GitHub</a>
-        </div>
+    <!-- Sidebar -->
+    <aside class="w-full lg:w-64 lg:flex-none lg:sticky lg:top-0 lg:h-screen overflow-y-auto border-b lg:border-b-0 lg:border-r border-line/30 px-7 py-8 lg:py-9">
+      <div class="flex items-center gap-2">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#AFCFFF" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2"/><path d="M9 2h6"/><path d="M12 2v3"/></svg>
+        <span class="font-serif text-[19px] font-semibold text-ink">notch</span>
+      </div>
+      <div class="mt-1.5 font-mono text-[11px] text-subtle">terminal time tracking</div>
+      <div class="mt-3.5 inline-block font-mono text-[10.5px] tracking-wide text-subtle border border-line/30 rounded-full px-2.5 py-1">MIT &middot; GO 1.26+</div>
 
-        <button class="sm:hidden p-2 -mr-2 text-ink" @click="mobileOpen = !mobileOpen" :aria-expanded="mobileOpen" aria-label="Toggle menu">
-          <svg x-show="!mobileOpen" xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16" /></svg>
-          <svg x-show="mobileOpen" xmlns="http://www.w3.org/2000/svg" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" style="display:none"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-        </button>
+      <nav class="mt-7 flex flex-wrap gap-x-5 gap-y-0.5 lg:block">
+        <a href="#top" @click.prevent="jump('top')" class="flex items-center justify-between gap-3 py-1.5 text-[13.5px] text-dim hover:text-ink transition-colors">
+          Overview <span class="kbd">O</span>
+        </a>
+        <a href="#features" @click.prevent="jump('features')" class="flex items-center justify-between gap-3 py-1.5 text-[13.5px] text-dim hover:text-ink transition-colors">
+          Features <span class="kbd">F</span>
+        </a>
+        <a href="#status-bar" @click.prevent="jump('status-bar')" class="flex items-center justify-between gap-3 py-1.5 text-[13.5px] text-dim hover:text-ink transition-colors">
+          Status bar <span class="kbd">S</span>
+        </a>
+        <a href="#theming" @click.prevent="jump('theming')" class="flex items-center justify-between gap-3 py-1.5 text-[13.5px] text-dim hover:text-ink transition-colors">
+          Theming <span class="kbd">T</span>
+        </a>
+      </nav>
+
+      <div class="hidden lg:block">
+        <div class="sidebar-h">Global</div>
+        <div class="kb-row"><span class="kbd">1-4</span><b>tabs</b></div>
+        <div class="kb-row"><span class="kbd">q</span><b>quit</b></div>
+
+        <div class="sidebar-h">Timers</div>
+        <div class="kb-row"><span class="kbd">&uarr;/k</span><b>up</b></div>
+        <div class="kb-row"><span class="kbd">&darr;/j</span><b>down</b></div>
+        <div class="kb-row"><span class="kbd">n</span><b>new</b></div>
+        <div class="kb-row"><span class="kbd">e</span><b>edit</b></div>
+        <div class="kb-row"><span class="kbd">d</span><b>delete</b></div>
+        <div class="kb-row"><span class="kbd min-w-[40px]">space</span><b>start/stop</b></div>
       </div>
 
-      <div x-show="mobileOpen" x-cloak x-transition @click.outside="mobileOpen = false" class="sm:hidden border-t border-line px-6 py-4 flex flex-col gap-4">
-        <a class="text-muted hover:text-ink text-sm transition-colors" href="#features" @click="mobileOpen = false">Features</a>
-        <a class="text-muted hover:text-ink text-sm transition-colors" href="#theming" @click="mobileOpen = false">Theming</a>
-        <a class="text-muted hover:text-ink text-sm transition-colors" href="#status-bar" @click="mobileOpen = false">Status Bar</a>
-        <a class="inline-flex items-center justify-center rounded-md font-semibold text-sm px-5 py-2.5 bg-primary text-ink w-fit"
-           href="https://github.com/aliasproject/kairon" target="_blank" rel="noopener">View on GitHub</a>
-      </div>
-    </nav>
+      <a href="https://github.com/aliasproject/notch" target="_blank" rel="noopener"
+         @click="flash('GitHub','G')"
+         class="mt-6 flex items-center justify-center gap-2.5 w-full border border-line/30 hover:border-subtle rounded-lg px-4 py-2.5 text-sm font-semibold text-ink hover:text-white transition-colors">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.73.5.98 5.24.98 11.52c0 5.02 3.26 9.28 7.78 10.78.57.1.78-.25.78-.55 0-.27-.01-1.16-.02-2.11-3.16.69-3.83-1.34-3.83-1.34-.52-1.31-1.26-1.66-1.26-1.66-1.03-.7.08-.69.08-.69 1.14.08 1.74 1.17 1.74 1.17 1.01 1.73 2.65 1.23 3.3.94.1-.73.4-1.23.72-1.51-2.52-.29-5.17-1.26-5.17-5.6 0-1.24.44-2.25 1.17-3.04-.12-.29-.51-1.45.11-3.02 0 0 .96-.31 3.14 1.16a10.9 10.9 0 0 1 5.72 0c2.18-1.47 3.14-1.16 3.14-1.16.62 1.57.23 2.73.11 3.02.73.79 1.17 1.8 1.17 3.04 0 4.35-2.66 5.31-5.19 5.59.41.35.77 1.04.77 2.11 0 1.52-.01 2.75-.01 3.12 0 .3.2.66.79.55 4.52-1.51 7.77-5.76 7.77-10.78C23.02 5.24 18.27.5 12 .5z"/></svg>
+        View on GitHub <span class="kbd">G</span>
+      </a>
+    </aside>
 
-    <!-- Hero -->
-    <header class="pt-24 pb-[72px] text-center">
-      <div class="max-w-[1120px] mx-auto px-6 flex flex-col items-center gap-5">
-        <div class="text-[13px] tracking-[0.08em] uppercase text-accent font-semibold">Terminal time tracking</div>
-        <h1 class="text-4xl sm:text-5xl md:text-[52px] leading-[1.08] font-extrabold tracking-[-0.02em] max-w-[760px]">
-          A fast, beautiful terminal UI<br class="hidden sm:block" /> for tracking time
+    <!-- Main content -->
+    <main class="flex-1 min-w-0">
+
+      <!-- Hero -->
+      <section id="top" class="px-7 lg:px-16 pt-16 lg:pt-20 pb-16">
+        <div class="eyebrow">Terminal time tracking</div>
+        <h1 class="mt-4 font-serif font-medium leading-[1.12] tracking-tight text-[38px] sm:text-[46px] lg:text-[54px] max-w-[680px]">
+          A fast, beautiful terminal UI <span class="italic" style="color:#AFCFFF;">for tracking time.</span>
         </h1>
-        <p class="text-lg md:text-[19px] text-muted max-w-[560px] leading-relaxed">
-          Track time entries, manage clients and projects, set billing rates, mark work as invoiced and paid, and generate income reports — all without leaving your terminal.
+        <p class="mt-5 text-base lg:text-[17px] leading-relaxed text-dim max-w-[560px]">
+          Track time entries, manage clients and projects, set billing rates, mark work as invoiced and paid, and generate income reports &mdash; all without leaving your terminal.
         </p>
-        <div class="flex items-center gap-4 flex-wrap justify-center mt-2">
-          <button
-            @click="copyInstall()"
-            class="bg-bgalt border border-line rounded-lg px-[18px] py-3 text-sm inline-flex items-center gap-2.5 font-mono hover:border-muted transition-colors"
-            title="Click to copy">
-            <span class="text-muted">$</span>
-            <span x-text="copied ? 'copied to clipboard!' : 'go build -o kairon .'"></span>
-          </button>
-          <a class="inline-flex items-center justify-center rounded-md font-semibold text-sm px-5 py-2.5 whitespace-nowrap bg-bgalt text-ink border border-line hover:border-muted transition-colors" href="#features">See features</a>
+        <div class="mt-8 flex items-center gap-4 flex-wrap">
+          <div class="code-block px-5 py-3.5" style="overflow-x:auto;"><span class="text-subtle">$</span> curl -fsSL https://raw.githubusercontent.com/aliasproject/notch/main/install.sh | sh</div>
+          <a href="#features" @click.prevent="jump('features')"
+             class="inline-flex items-center gap-2.5 border border-line/30 hover:border-subtle rounded-lg px-4 py-2.5 text-sm font-semibold text-ink hover:text-white transition-colors">
+            See features <span class="kbd">F</span>
+          </a>
         </div>
-      </div>
+        <a href="https://github.com/aliasproject/notch#from-source" target="_blank" rel="noopener"
+           class="mt-3 inline-block text-xs text-subtle hover:text-dim transition-colors">
+          or build from source &rarr;
+        </a>
+      </section>
 
-      <!-- Terminal window mockup -->
-      <div class="max-w-[1120px] mx-auto px-6 mt-14">
-        <div class="bg-bgalt border border-line rounded-xl overflow-hidden shadow-[0_40px_80px_-40px_rgba(0,0,0,0.6)] text-left">
-          <div class="flex items-center gap-2 px-4 py-3 border-b border-line">
-            <span class="w-[11px] h-[11px] rounded-full bg-danger"></span>
-            <span class="w-[11px] h-[11px] rounded-full bg-warning"></span>
-            <span class="w-[11px] h-[11px] rounded-full bg-success"></span>
+      <!-- Hero visual: terminal mockup -->
+      <section class="px-7 lg:px-16 pb-20">
+        <div class="bg-bgalt border border-line/30 rounded-2xl overflow-hidden shadow-[0_50px_90px_-45px_rgba(0,0,0,0.7)]">
+          <div class="flex items-center gap-2 px-4 py-3 border-b border-line/30">
+            <span class="w-2.5 h-2.5 rounded-full bg-danger"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-warning"></span>
+            <span class="w-2.5 h-2.5 rounded-full bg-success"></span>
           </div>
-          <div class="flex items-center px-5 py-3 text-[13px] bg-bgalt">
-            <div class="text-primary font-bold whitespace-nowrap">⏱&nbsp;&nbsp;Kairon</div>
-            <div class="flex-1 text-center overflow-x-auto">
-              <span class="text-ink font-bold px-3.5">Timers</span><span class="text-faint">│</span>
-              <span class="text-muted px-3.5">Projects</span><span class="text-faint">│</span>
-              <span class="text-muted px-3.5">Clients</span><span class="text-faint">│</span>
-              <span class="text-muted px-3.5">Reports</span>
+          <div class="flex items-center px-5 py-3 font-mono text-[13px]">
+            <div class="flex items-center gap-1.5 font-bold whitespace-nowrap" style="color:#AFCFFF;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2"/><path d="M9 2h6"/><path d="M12 2v3"/></svg>
+              notch
             </div>
-            <div class="w-[120px] hidden md:block"></div>
+            <div class="flex-1 flex items-center justify-center gap-3.5 overflow-x-auto text-subtle">
+              <span class="text-ink font-semibold">Timers</span>
+              <span class="w-px h-3.5 bg-line/50"></span>
+              <span>Projects</span>
+              <span class="w-px h-3.5 bg-line/50"></span>
+              <span>Clients</span>
+              <span class="w-px h-3.5 bg-line/50"></span>
+              <span>Reports</span>
+            </div>
+            <div class="w-20 hidden md:block"></div>
           </div>
-          <div class="bg-bg px-4 sm:px-6 py-5 overflow-x-auto">
-            <table class="w-full border-collapse font-mono text-[13px] min-w-[520px]">
+          <div class="bg-[#111D26] px-4 sm:px-6 py-5 overflow-x-auto">
+            <table class="w-full border-collapse font-mono text-[12.5px] min-w-[520px]">
               <tr>
-                <th class="text-left text-muted font-semibold px-2 py-1.5 border-b border-line">Task</th>
-                <th class="text-left text-muted font-semibold px-2 py-1.5 border-b border-line">Project</th>
-                <th class="text-left text-muted font-semibold px-2 py-1.5 border-b border-line">Duration</th>
-                <th class="text-left text-muted font-semibold px-2 py-1.5 border-b border-line">Status</th>
+                <th class="text-left text-subtle font-semibold px-2 pb-2.5 border-b border-line/30">Task</th>
+                <th class="text-left text-subtle font-semibold px-2 pb-2.5 border-b border-line/30">Project</th>
+                <th class="text-left text-subtle font-semibold px-2 pb-2.5 border-b border-line/30">Duration</th>
+                <th class="text-left text-subtle font-semibold px-2 pb-2.5 border-b border-line/30">Status</th>
               </tr>
               <tr>
-                <td class="px-2 py-1.5 text-primary font-bold">▌ Build feature</td>
-                <td class="px-2 py-1.5 text-primary font-bold">Acme Co › Website</td>
-                <td class="px-2 py-1.5 text-success font-bold">1:23:45</td>
-                <td class="px-2 py-1.5"></td>
+                <td class="px-2 py-2 font-bold" style="color:#AFCFFF;">
+                  <span class="inline-flex items-center gap-2"><svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg>Build feature</span>
+                </td>
+                <td class="px-2 py-2 font-bold" style="color:#AFCFFF;">Acme Co &rsaquo; Website</td>
+                <td class="px-2 py-2 text-success font-bold">1:23:45</td>
+                <td class="px-2 py-2"></td>
               </tr>
               <tr>
-                <td class="px-2 py-1.5 text-ink">&nbsp;&nbsp;Fix bug #42</td>
-                <td class="px-2 py-1.5 text-muted">Acme Co › Website</td>
-                <td class="px-2 py-1.5 text-muted">0:45:10</td>
-                <td class="px-2 py-1.5"><span class="rounded px-2.5 py-0.5 text-[10.5px] font-bold font-mono bg-accent text-bg">INVOICED</span></td>
+                <td class="px-2 py-2 text-ink pl-7">Fix bug #42</td>
+                <td class="px-2 py-2 text-subtle">Acme Co &rsaquo; Website</td>
+                <td class="px-2 py-2 text-subtle">0:45:10</td>
+                <td class="px-2 py-2"><span class="rounded px-2 py-0.5 text-[10px] font-bold font-mono bg-accent text-bg">INVOICED</span></td>
               </tr>
               <tr>
-                <td class="px-2 py-1.5 text-ink">&nbsp;&nbsp;Client call</td>
-                <td class="px-2 py-1.5 text-muted">Globex › Retainer</td>
-                <td class="px-2 py-1.5 text-muted">0:15:00</td>
-                <td class="px-2 py-1.5"><span class="rounded px-2.5 py-0.5 text-[10.5px] font-bold font-mono bg-success text-bg">PAID</span></td>
+                <td class="px-2 py-2 text-ink pl-7">Client call</td>
+                <td class="px-2 py-2 text-subtle">Globex &rsaquo; Retainer</td>
+                <td class="px-2 py-2 text-subtle">0:15:00</td>
+                <td class="px-2 py-2"><span class="rounded px-2 py-0.5 text-[10px] font-bold font-mono bg-success text-bg">PAID</span></td>
               </tr>
             </table>
           </div>
-          <div class="bg-bgalt px-5 py-1.5 text-[11px] text-faint font-mono overflow-x-auto whitespace-nowrap">↑/k up  ↓/j down  n new  e edit  d delete  space start/stop</div>
-          <div class="bg-bgalt border-t border-line flex justify-between items-center px-5 py-2.5">
-            <div class="flex items-center gap-3 min-w-0">
-              <span class="bg-success text-bg font-bold rounded px-3 py-1 text-xs font-mono whitespace-nowrap">● 1:23:45</span>
-              <span class="font-bold text-[13px] truncate">Build feature</span>
-              <span class="text-muted font-mono text-xs hidden sm:inline truncate">Acme Co › Website Redesign</span>
-            </div>
-            <div></div>
+          <div class="bg-bgalt px-5 py-1.5 font-mono text-[10.5px] text-dim/70 overflow-x-auto whitespace-nowrap">&uarr;/k up &nbsp; &darr;/j down &nbsp; n new &nbsp; e edit &nbsp; d delete &nbsp; space start/stop</div>
+          <div class="bg-bgalt border-t border-line/30 flex items-center gap-3 px-5 py-2.5">
+            <span class="bg-success text-bg font-bold rounded px-3 py-1 text-xs font-mono whitespace-nowrap inline-flex items-center gap-1.5">
+              <svg width="7" height="7" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4" fill="currentColor"/></svg> 1:23:45
+            </span>
+            <span class="font-bold text-[13px]">Build feature</span>
+            <span class="text-subtle font-mono text-xs hidden sm:inline">Acme Co &rsaquo; Website Redesign</span>
           </div>
         </div>
-      </div>
-    </header>
+      </section>
 
-    <!-- Features -->
-    <section class="pt-24 pb-24 border-t border-line max-[860px]:pt-16 max-[860px]:pb-16" id="features">
-      <div class="max-w-[1120px] mx-auto px-6">
-        <div class="flex flex-col gap-3 mb-12">
-          <div class="text-[13px] tracking-[0.06em] uppercase text-accent font-semibold">Features</div>
-          <h2 class="text-3xl md:text-[34px] font-extrabold tracking-[-0.01em] max-w-[520px]">Everything a freelancer or consultant needs to bill for their time</h2>
-        </div>
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+      <!-- Features -->
+      <section id="features" class="px-7 lg:px-16 pt-16 pb-16 border-t border-line/30">
+        <div class="eyebrow">Features</div>
+        <h2 class="mt-3.5 font-serif font-medium text-[28px] lg:text-[32px] tracking-tight max-w-[560px]">Everything a freelancer or consultant needs to bill for their time.</h2>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 mt-10">
           <template x-for="f in features" :key="f.title">
-            <div class="bg-bgalt border border-line rounded-[10px] p-6 flex flex-col gap-3">
-              <div class="w-9 h-9 rounded-lg" :style="{ background: f.color }"></div>
-              <div class="text-base font-bold" x-text="f.title"></div>
-              <div class="text-sm text-muted leading-[1.5]" x-text="f.desc"></div>
+            <div class="bg-[#111D26] border border-line/30 rounded-xl p-6 flex flex-col gap-3.5">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" :stroke="f.color" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" x-html="f.icon"></svg>
+              <div class="text-[15.5px] font-semibold text-ink" x-text="f.title"></div>
+              <div class="text-[13.5px] leading-relaxed text-subtle" x-text="f.desc"></div>
             </div>
           </template>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- Status bar integration -->
-    <section class="pt-24 pb-24 border-t border-line max-[860px]:pt-16 max-[860px]:pb-16" id="status-bar">
-      <div class="max-w-[1120px] mx-auto px-6">
-        <div class="flex flex-col gap-3 mb-9">
-          <div class="text-[13px] tracking-[0.06em] uppercase text-accent font-semibold">Status bar integration</div>
-          <h2 class="text-3xl md:text-[34px] font-extrabold tracking-[-0.01em] max-w-[520px]">Your running timer, in your shell bar</h2>
-          <p class="text-base text-muted max-w-[560px] leading-[1.55]">
-            <span class="font-mono">kairon status</span> prints the currently-running timer (or nothing, if idle) and exits — no daemon required. Works with waybar, tmux, i3blocks, dwm, or anything that shells out and reads stdout.
-          </p>
-        </div>
-        <div class="flex gap-5 flex-wrap items-stretch">
-          <div class="flex-1 min-w-[280px] flex flex-col gap-3">
-            <div class="bg-[#111827] border border-line rounded-md px-4 py-2 flex justify-end">
-              <span class="bg-bgalt border border-line rounded px-3.5 py-1.5 font-mono text-[13px] text-success font-bold inline-flex items-center gap-2">⏱ Build feature · 1:23:45</span>
+      <!-- Status bar integration -->
+      <section id="status-bar" class="px-7 lg:px-16 pt-16 pb-16 border-t border-line/30">
+        <div class="eyebrow">Status bar integration</div>
+        <h2 class="mt-3.5 font-serif font-medium text-[26px] lg:text-[30px] tracking-tight max-w-[520px]">Your running timer, in your shell bar.</h2>
+        <p class="mt-3.5 text-[15px] leading-relaxed text-subtle max-w-[560px]">
+          <span class="font-mono text-dim">notch status</span> prints the currently-running timer (or nothing, if idle) and exits &mdash; no daemon required. Works with waybar, tmux, i3blocks, dwm, or anything that shells out and reads stdout.
+        </p>
+        <div class="flex gap-6 flex-wrap items-stretch mt-9">
+          <div class="flex-1 min-w-[280px] flex flex-col gap-3.5">
+            <div class="bg-[#111D26] border border-line/30 rounded-lg px-3.5 py-2.5 flex justify-end">
+              <span class="bg-bgalt border border-line/30 rounded-md px-3 py-1.5 font-mono text-[12px] text-success font-bold inline-flex items-center gap-2">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2"/><path d="M9 2h6"/><path d="M12 2v3"/></svg>
+                Build feature &middot; 1:23:45
+              </span>
             </div>
-            <div class="bg-[#0B1220] border border-line rounded-[10px] px-5 py-[18px] font-mono text-[13px] leading-[1.7] overflow-x-auto whitespace-pre"><span class="text-accent">kairon status</span>         <span class="text-muted"># plain text — for shell bars</span>
-<span class="text-accent">kairon status -json</span>   <span class="text-muted"># JSON — for waybar</span></div>
+            <div class="code-block">
+              <div class="code-label">shell</div>
+              <div class="code-body">
+                <div class="code-line"><span class="ln">1</span><span class="lc"><span style="color:#9DC6E9;">notch status</span>         <span class="text-subtle"># plain text &mdash; for shell bars</span></span></div>
+                <div class="code-line"><span class="ln">2</span><span class="lc"><span style="color:#9DC6E9;">notch status -json</span>   <span class="text-subtle"># JSON &mdash; for waybar</span></span></div>
+              </div>
+            </div>
           </div>
           <div class="flex-1 min-w-[280px]">
-            <div class="bg-[#0B1220] border border-line rounded-[10px] px-5 py-[18px] font-mono text-[13px] leading-[1.7] overflow-x-auto whitespace-pre"><span class="text-muted">// waybar config</span>
-<span class="text-success">"custom/kairon"</span>: {
-  <span class="text-success">"exec"</span>: <span class="text-success">"kairon status -json"</span>,
-  <span class="text-success">"return-type"</span>: <span class="text-success">"json"</span>,
-  <span class="text-success">"interval"</span>: 5
-}</div>
+            <div class="code-block">
+              <div class="code-label">~/.config/waybar/config.jsonc</div>
+              <div class="code-body">
+                <div class="code-line"><span class="ln">1</span><span class="lc"><span class="text-success">"custom/notch"</span>: {</span></div>
+                <div class="code-line"><span class="ln">2</span><span class="lc">&nbsp;&nbsp;<span class="text-success">"exec"</span>: <span class="text-success">"notch status -json"</span>,</span></div>
+                <div class="code-line"><span class="ln">3</span><span class="lc">&nbsp;&nbsp;<span class="text-success">"return-type"</span>: <span class="text-success">"json"</span>,</span></div>
+                <div class="code-line"><span class="ln">4</span><span class="lc">&nbsp;&nbsp;<span class="text-success">"interval"</span>: 5</span></div>
+                <div class="code-line"><span class="ln">5</span><span class="lc">}</span></div>
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- Theming -->
-    <section class="pt-24 pb-24 border-t border-line max-[860px]:pt-16 max-[860px]:pb-16" id="theming">
-      <div class="max-w-[1120px] mx-auto px-6">
-        <div class="flex flex-col gap-3 mb-9">
-          <div class="text-[13px] tracking-[0.06em] uppercase text-accent font-semibold">Theming</div>
-          <h2 class="text-3xl md:text-[34px] font-extrabold tracking-[-0.01em] max-w-[520px]">Matches your terminal, not the other way around</h2>
-          <p class="text-base text-muted max-w-[560px] leading-[1.55]">
-            Drop a <span class="font-mono">theme.conf</span> in your config directory to recolor Kairon — built for pywal, Omarchy, and other distro-theming setups. Changes are picked up live, no restart needed.
-          </p>
-        </div>
-        <div class="flex gap-5 flex-wrap items-start">
-          <div class="flex-1 min-w-[280px] bg-[#0B1220] border border-line rounded-[10px] px-5 py-[18px] font-mono text-[13px] leading-[1.7] overflow-x-auto whitespace-pre">primary   <span class="text-muted">=</span> <span class="text-success">#7C3AED</span>
-accent    <span class="text-muted">=</span> <span class="text-success">#06B6D4</span>
-success   <span class="text-muted">=</span> <span class="text-success">#10B981</span>
-warning   <span class="text-muted">=</span> <span class="text-success">#F59E0B</span>
-danger    <span class="text-muted">=</span> <span class="text-success">#EF4444</span>
-bg        <span class="text-muted">=</span> <span class="text-success">#0F172A</span></div>
+      <!-- Theming -->
+      <section id="theming" class="px-7 lg:px-16 pt-16 pb-16 border-t border-line/30">
+        <div class="eyebrow">Theming</div>
+        <h2 class="mt-3.5 font-serif font-medium text-[26px] lg:text-[30px] tracking-tight max-w-[520px]">Matches your terminal, not the other way around.</h2>
+        <p class="mt-3.5 text-[15px] leading-relaxed text-subtle max-w-[560px]">
+          Drop a <span class="font-mono text-dim">theme.conf</span> in your config directory to recolor Notch. Changes are picked up live &mdash; no restart needed.
+        </p>
+        <div class="flex gap-6 flex-wrap items-start mt-9">
+          <div class="flex-1 min-w-[280px] code-block">
+            <div class="code-label">~/.config/notch/theme.conf</div>
+            <div class="code-body">
+              <div class="code-line"><span class="ln">1</span><span class="lc">primary   <span class="text-subtle">=</span> <span style="color:#91B0DE;">#91B0DE</span></span></div>
+              <div class="code-line"><span class="ln">2</span><span class="lc">accent    <span class="text-subtle">=</span> <span style="color:#9DC6E9;">#9DC6E9</span></span></div>
+              <div class="code-line"><span class="ln">3</span><span class="lc">success   <span class="text-subtle">=</span> <span style="color:#99C2ED;">#99C2ED</span></span></div>
+              <div class="code-line"><span class="ln">4</span><span class="lc">warning   <span class="text-subtle">=</span> <span style="color:#A4CBF7;">#A4CBF7</span></span></div>
+              <div class="code-line"><span class="ln">5</span><span class="lc">danger    <span class="text-subtle">=</span> <span style="color:#C79EA9;">#C79EA9</span></span></div>
+              <div class="code-line"><span class="ln">6</span><span class="lc">bg        <span class="text-subtle">=</span> <span style="color:#AFCFFF;">#0D171F</span></span></div>
+            </div>
+          </div>
           <div class="flex-1 min-w-[280px]">
-            <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
+            <div class="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
               <template x-for="c in palette" :key="c.name">
-                <div class="border border-line rounded-lg overflow-hidden bg-bgalt">
-                  <div class="h-10" :style="{ background: c.hex }"></div>
+                <div class="border border-line/30 rounded-lg overflow-hidden bg-[#111D26]">
+                  <div class="h-9" :style="{ background: c.hex }"></div>
                   <div class="px-2.5 py-2">
-                    <div class="text-[11px] font-bold" x-text="c.name"></div>
-                    <div class="text-[10px] text-muted font-mono" x-text="c.hex"></div>
+                    <div class="text-[10.5px] font-bold text-ink" x-text="c.name"></div>
+                    <div class="text-[9.5px] text-subtle font-mono" x-text="c.hex"></div>
                   </div>
                 </div>
               </template>
             </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- Footer -->
-    <footer class="border-t border-line pt-10 pb-10">
-      <div class="max-w-[1120px] mx-auto px-6 flex items-center justify-between flex-wrap gap-4">
-        <div class="flex items-center gap-2">
-          <span>⏱</span>
-          <span class="text-muted text-[13px]">Kairon — MIT licensed · Go 1.21+ · single binary</span>
+      <!-- Geometric accent band -->
+      <section class="px-7 lg:px-16 py-10 border-t border-line/30">
+        <div class="relative rounded-xl overflow-hidden bg-[#111D26] p-5">
+          <div class="grid grid-cols-[repeat(20,minmax(0,1fr))] sm:grid-cols-[repeat(30,minmax(0,1fr))] lg:grid-cols-[repeat(40,minmax(0,1fr))] gap-1">
+            <template x-for="(c, i) in bandCells" :key="i">
+              <div class="w-full aspect-square rounded-[1px]" :style="{ background: c }"></div>
+            </template>
+          </div>
+          <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-14 h-14 rounded-full bg-bg border border-line/30 flex items-center justify-center" style="box-shadow:0 0 0 8px #111D26;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#AFCFFF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2"/><path d="M9 2h6"/><path d="M12 2v3"/></svg>
+          </div>
+        </div>
+      </section>
+
+      <!-- Footer -->
+      <footer class="px-7 lg:px-16 pt-8 pb-12 flex items-center justify-between flex-wrap gap-4">
+        <div class="flex items-center gap-2 text-subtle text-[13px]">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2"/><path d="M9 2h6"/><path d="M12 2v3"/></svg>
+          Notch &mdash; MIT licensed &middot; Go 1.26+ &middot; single binary
         </div>
         <div class="flex items-center gap-5 text-sm">
-          <a class="text-accent hover:text-highlight" href="https://github.com/aliasproject/kairon" target="_blank" rel="noopener">GitHub</a>
-          <a class="text-accent hover:text-highlight" href="#features">Features</a>
-          <a class="text-accent hover:text-highlight" href="#theming">Theming</a>
+          <a class="text-highlight hover:text-white transition-colors" href="https://github.com/aliasproject/notch" target="_blank" rel="noopener">GitHub</a>
+          <a class="text-highlight hover:text-white transition-colors" href="#features" @click.prevent="jump('features')">Features</a>
+          <a class="text-highlight hover:text-white transition-colors" href="#theming" @click.prevent="jump('theming')">Theming</a>
         </div>
-      </div>
-    </footer>
+      </footer>
 
+    </main>
   </div>
 
+  <!-- Hotkey flash -->
+  <div x-show="hotkey" x-transition.opacity x-cloak
+       class="fixed bottom-6 right-6 z-50 flex items-center gap-2.5 bg-bgalt border border-line/40 rounded-lg pl-2.5 pr-4 py-2 shadow-xl font-mono text-xs">
+    <span class="kbd" x-text="hotkey && hotkey.key"></span>
+    <span class="text-subtle">&rarr;</span>
+    <span class="text-ink font-semibold" x-text="hotkey && hotkey.label"></span>
+  </div>
+
+<style>
+  .eyebrow{ font-family:"JetBrains Mono",ui-monospace,monospace; font-size:12px; letter-spacing:0.14em; text-transform:uppercase; font-weight:600; color:#9DC6E9; }
+  .kbd{
+    display:inline-flex; align-items:center; justify-content:center;
+    min-width:20px; height:20px; padding:0 5px; border-radius:5px;
+    border:1px solid rgba(95,100,104,0.4); background:rgba(255,255,255,0.03);
+    font-family:"JetBrains Mono",ui-monospace,monospace; font-size:11px; font-weight:600; color:#899EAC;
+    line-height:1;
+  }
+  .sidebar-h{ font-family:"JetBrains Mono",ui-monospace,monospace; font-size:10.5px; letter-spacing:0.1em; text-transform:uppercase; color:#899EAC; font-weight:600; margin:20px 0 8px 0; }
+  .kb-row{ display:flex; align-items:center; gap:10px; padding:3.5px 0; font-size:12.5px; color:#899EAC; font-family:"JetBrains Mono",ui-monospace,monospace; }
+  .kb-row b{ color:#B7D2E5; font-weight:500; }
+  .code-block{ background:#0A1319; border:1px solid rgba(95,100,104,0.3); border-radius:10px; font-family:"JetBrains Mono",ui-monospace,monospace; font-size:12.5px; line-height:1.5; overflow:hidden; }
+  .code-label{ padding:6px 14px; border-bottom:1px solid rgba(95,100,104,0.25); font-size:10.5px; letter-spacing:0.02em; color:#899EAC; white-space:normal; }
+  .code-body{ padding:8px 0; overflow-x:auto; white-space:normal; }
+  .code-line{ display:flex; white-space:normal; }
+  .code-line .ln{ flex:0 0 auto; width:1.75rem; margin-right:14px; padding-right:12px; border-right:1px solid rgba(95,100,104,0.2); text-align:right; color:rgba(137,158,172,0.4); user-select:none; white-space:normal; }
+  .code-line .lc{ padding-right:20px; white-space:pre; }
+</style>
+
 <script>
-  function landing() {
+  function site() {
     return {
-      mobileOpen: false,
-      copied: false,
+      hotkey: null,
+      _t: null,
       features: [
-        { title: "Timer tracking", desc: "Start and stop timers on tasks, see the live elapsed time in the bottom status bar.", color: "#7C3AED" },
-        { title: "Clients & Projects", desc: "Full CRUD — clients on their own tab, with project management right next door.", color: "#06B6D4" },
-        { title: "Billing rates", desc: "Set an hourly rate per client; earnings are calculated automatically.", color: "#10B981" },
-        { title: "Invoice & payment tracking", desc: "Mark time entries as invoiced and/or paid as work moves through your pipeline.", color: "#F59E0B" },
-        { title: "Reports", desc: "Aggregated hours, earnings, and invoice status by project and client, with quick date presets.", color: "#A78BFA" },
-        { title: "Pure Go, single binary", desc: "No CGo, no C compiler needed. One file, zero runtime dependencies, cross-compiles trivially.", color: "#EF4444" },
+        { title: "Timer tracking", desc: "Start and stop timers per task; the live elapsed time shows right in the bottom status bar.", color: "#91B0DE", icon: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l3 2"/><path d="M9 2h6"/><path d="M12 2v3"/>' },
+        { title: "Clients & Projects", desc: "Full CRUD on both — clients get their own tab, with project management right next door.", color: "#9DC6E9", icon: '<rect x="3" y="8" width="18" height="11" rx="2"/><path d="M8 8V6a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M3 13h18"/>' },
+        { title: "Billing rates", desc: "Set an hourly rate per client. Earnings calculate automatically as time is logged.", color: "#99C2ED", icon: '<path d="M20 12l-8 8-9-9V3h8l9 9z"/><circle cx="7.5" cy="7.5" r="1.1" fill="currentColor" stroke="none"/>' },
+        { title: "Invoicing & payments", desc: "Mark entries as invoiced and/or paid as work moves through your pipeline.", color: "#A4CBF7", icon: '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.5 2.5L16 9"/>' },
+        { title: "Reports", desc: "Aggregated hours, earnings, and invoice status by project or client, with quick date presets.", color: "#AFCFFF", icon: '<path d="M4 20V13M10 20V7M16 20v-4M3 20h18"/>' },
+        { title: "Pure Go, single binary", desc: "No CGo, no C compiler. One file, zero runtime dependencies, cross-compiles trivially.", color: "#C79EA9", icon: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/>' },
       ],
       palette: [
-        { name: "Primary", hex: "#7C3AED" },
-        { name: "Accent", hex: "#06B6D4" },
-        { name: "Success", hex: "#10B981" },
-        { name: "Warning", hex: "#F59E0B" },
-        { name: "Danger", hex: "#EF4444" },
-        { name: "Highlight", hex: "#A78BFA" },
-        { name: "Text", hex: "#E2E8F0" },
-        { name: "Dim", hex: "#64748B" },
-        { name: "Subtle", hex: "#334155" },
-        { name: "Bg", hex: "#0F172A" },
-        { name: "Bg Alt", hex: "#1E293B" },
-        { name: "Border", hex: "#1E293B" },
+        { name: "Primary", hex: "#91B0DE" }, { name: "Accent", hex: "#9DC6E9" },
+        { name: "Success", hex: "#99C2ED" }, { name: "Warning", hex: "#A4CBF7" },
+        { name: "Danger", hex: "#C79EA9" }, { name: "Highlight", hex: "#AFCFFF" },
+        { name: "Text", hex: "#C2D9E9" }, { name: "Dim", hex: "#B7D2E5" },
+        { name: "Subtle", hex: "#899EAC" }, { name: "Bg", hex: "#0D171F" },
+        { name: "Bg Alt", hex: "#252E35" }, { name: "Border", hex: "#5F6468" },
       ],
-      copyInstall() {
-        navigator.clipboard.writeText("go build -o kairon .").catch(() => {});
-        this.copied = true;
-        setTimeout(() => (this.copied = false), 1500);
+      bandCells: (() => {
+        const c = ["#91B0DE", "#9DC6E9", "#99C2ED", "#A4CBF7", "#C79EA9", "#AFCFFF", "rgba(95,100,104,0.2)"];
+        const out = [];
+        for (let i = 0; i < 120; i++) {
+          const color = c[(i * 7 + Math.floor(i / 5)) % c.length];
+          out.push(color === "rgba(95,100,104,0.2)" ? color : color + "40");
+        }
+        return out;
+      })(),
+      jump(id) {
+        document.getElementById(id)?.scrollIntoView({ block: "start" });
+      },
+      flash(label, key) {
+        this.hotkey = { label, key };
+        clearTimeout(this._t);
+        this._t = setTimeout(() => (this.hotkey = null), 1400);
+      },
+      handleKey(e) {
+        const tag = (e.target.tagName || "").toLowerCase();
+        if (tag === "input" || tag === "textarea" || e.target.isContentEditable) return;
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        switch (e.key.toLowerCase()) {
+          case "o": this.jump("top"); this.flash("Overview", "O"); break;
+          case "f": this.jump("features"); this.flash("Features", "F"); break;
+          case "s": this.jump("status-bar"); this.flash("Status bar", "S"); break;
+          case "t": this.jump("theming"); this.flash("Theming", "T"); break;
+          case "g": this.flash("GitHub", "G"); window.open("https://github.com/aliasproject/notch", "_blank", "noopener"); break;
+        }
       },
     };
   }
