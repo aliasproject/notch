@@ -39,6 +39,16 @@ sudo mv notch /usr/local/bin/
 
 - Go 1.26+
 
+### Updating
+
+```sh
+notch -v              # print the installed version
+notch update -check   # see whether a newer release exists
+notch update          # download and install it in place
+```
+
+`update` fetches the latest [GitHub release](https://github.com/aliasproject/notch/releases) for your OS/arch, verifies it against the release's `checksums.txt`, and swaps the running binary for it. If notch lives somewhere you can't write to (e.g. `/usr/local/bin`), run `sudo notch update`. A binary built from source reports `dev` and is left alone unless you pass `-force`.
+
 ---
 
 ## Usage
@@ -66,6 +76,30 @@ notch status -json   # JSON
 ```
 
 Plain text looks like `⏱ Build feature · 1:23:45` when a timer is running, and is empty when idle.
+
+---
+
+## Scripting
+
+Beyond `status`, notch has a few more one-shot subcommands for driving it from scripts or a status-bar plugin without opening the TUI. Like `status`, none of them start a daemon — they just open the database, do one thing, and exit.
+
+```sh
+notch clients           # list all clients, one per line: "<id>\t<name>"
+notch clients -json     # same, as JSON: [{"id":1,"name":"Acme"}, ...]
+
+notch projects          # list all projects, one per line: "<id>\t<client> › <project>\t<total>"
+notch projects -json    # same, as JSON: [{"id":1,"name":"Website","clientId":1,"clientName":"Acme","totalSeconds":123}, ...]
+
+notch tasks              # list recently-used (project, task) pairings, most recent first
+notch tasks -json        # same, as JSON: [{"projectId":1,"projectName":"Website","clientName":"Acme","task":"Meeting","totalSeconds":123}, ...]
+
+notch start --project <id> [--task "description"] [--notes "notes"]  # stop whatever's running, start a new timer
+notch stop                                                            # stop whatever's running (no-op if idle)
+```
+
+`start` always stops any currently-running entry first, the same as the TUI does — only one timer runs at a time. `--notes` is CLI-only: the TUI's own new-timer form has a Notes field, but doesn't actually persist it for a brand-new entry (only when editing an existing one) — `start --notes` does persist it, via an update right after the entry is created.
+
+One exception to the "one-shot, exits immediately" rule above: `notch watch` runs until killed, printing a line to stdout each time another process writes to the database. It exists for a consumer with no way to hold its own SQLite connection open and check for changes cheaply (e.g. a status-bar widget) — see `internal/db/watch.go`'s doc comment for why a bare filesystem watch on the WAL files can't tell a real write apart from another process just reading, and self-triggers if you try.
 
 ---
 
@@ -264,3 +298,14 @@ notch/
 ## License
 
 MIT
+
+---
+
+## Releasing
+
+Releases are cut by pushing a version tag. The `release` GitHub Actions workflow runs [GoReleaser](https://goreleaser.com), which builds linux/darwin/windows × amd64/arm64 binaries, stamps the version into `notch -v`, and publishes the archives, `checksums.txt`, and a changelog to a GitHub release. `install.sh` and `notch update` both pull from those assets.
+
+```sh
+git tag v0.8.0
+git push origin v0.8.0
+```

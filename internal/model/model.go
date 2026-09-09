@@ -69,3 +69,16 @@ type ReportRow struct {
 	Paid        int
 	Entries     []*Entry // populated after load
 }
+
+// RecentTask is one distinct (project, task) pairing that's been tracked
+// before, with its accumulated time across every finished entry -- for
+// pickers that want to resume a specific named task rather than just start
+// a bare project (see db.ListRecentTasks).
+type RecentTask struct {
+	ProjectID    int64
+	ProjectName  string
+	ClientName   string
+	Task         string
+	TotalSeconds int64
+	LastUsed     time.Time
+}

@@ -1545,178 +1545,6 @@ func TestSubmitForm_Edit_Success(t *testing.T) {
 	}
 }
 
-// ── resolveProject ────────────────────────────────────────────────────────────
-
-func TestResolveProject_ExplicitProjectIDShortCircuits(t *testing.T) {
-	d := newTestDB(t)
-	got, err := resolveProject(d, 0, "", 5, "")
-	if err != nil {
-		t.Fatalf("resolveProject: %v", err)
-	}
-	if got != 5 {
-		t.Errorf("resolveProject = %d, want 5 (explicit projectID)", got)
-	}
-}
-
-func TestResolveProject_BothBlankIsUncategorized(t *testing.T) {
-	d := newTestDB(t)
-	got, err := resolveProject(d, 0, "", 0, "")
-	if err != nil {
-		t.Fatalf("resolveProject: %v", err)
-	}
-	if got != 0 {
-		t.Errorf("resolveProject with everything blank = %d, want 0", got)
-	}
-}
-
-func TestResolveProject_ExistingClientCaseInsensitiveMatch(t *testing.T) {
-	d := newTestDB(t)
-	c, err := d.CreateClient("Acme", 0)
-	if err != nil {
-		t.Fatalf("CreateClient: %v", err)
-	}
-
-	got, err := resolveProject(d, 0, "acme", 0, "New Project")
-	if err != nil {
-		t.Fatalf("resolveProject: %v", err)
-	}
-	if got == 0 {
-		t.Fatal("want a nonzero project ID")
-	}
-	projects, _ := d.ListProjects(c.ID)
-	if len(projects) != 1 || projects[0].Name != "New Project" {
-		t.Errorf("projects for existing client = %+v, want one 'New Project'", projects)
-	}
-	clients, _ := d.ListClients()
-	if len(clients) != 1 {
-		t.Errorf("want the existing client to be reused, not duplicated: %+v", clients)
-	}
-}
-
-func TestResolveProject_NewClientCreated(t *testing.T) {
-	d := newTestDB(t)
-	got, err := resolveProject(d, 0, "Brand New Client", 0, "")
-	if err != nil {
-		t.Fatalf("resolveProject: %v", err)
-	}
-	if got == 0 {
-		t.Fatal("want a nonzero project ID")
-	}
-	clients, _ := d.ListClients()
-	if len(clients) != 1 || clients[0].Name != "Brand New Client" {
-		t.Errorf("clients = %+v, want one 'Brand New Client'", clients)
-	}
-	// projectName == "" && clientName != "" -> project defaults to the client name.
-	projects, _ := d.ListProjects(clients[0].ID)
-	if len(projects) != 1 || projects[0].Name != "Brand New Client" {
-		t.Errorf("projects = %+v, want project named after the client", projects)
-	}
-}
-
-func TestResolveProject_ProjectNameOnlyCreatesClientFromProjectName(t *testing.T) {
-	d := newTestDB(t)
-	got, err := resolveProject(d, 0, "", 0, "Standalone Project")
-	if err != nil {
-		t.Fatalf("resolveProject: %v", err)
-	}
-	if got == 0 {
-		t.Fatal("want a nonzero project ID")
-	}
-	clients, _ := d.ListClients()
-	if len(clients) != 1 || clients[0].Name != "Standalone Project" {
-		t.Errorf("clients = %+v, want one client named after the project", clients)
-	}
-}
-
-func TestResolveProject_ExistingProjectFoundWithoutDuplicating(t *testing.T) {
-	d := newTestDB(t)
-	c, _ := d.CreateClient("Acme", 0)
-	p, err := d.CreateProject(c.ID, "Website")
-	if err != nil {
-		t.Fatalf("CreateProject: %v", err)
-	}
-
-	got, err := resolveProject(d, c.ID, "Acme", 0, "website") // case-insensitive match
-	if err != nil {
-		t.Fatalf("resolveProject: %v", err)
-	}
-	if got != p.ID {
-		t.Errorf("resolveProject = %d, want existing project ID %d", got, p.ID)
-	}
-	projects, _ := d.ListProjects(c.ID)
-	if len(projects) != 1 {
-		t.Errorf("want no duplicate project created: %+v", projects)
-	}
-}
-
-func TestResolveProject_NewProjectUnderExistingClient(t *testing.T) {
-	d := newTestDB(t)
-	c, _ := d.CreateClient("Acme", 0)
-
-	got, err := resolveProject(d, c.ID, "Acme", 0, "New Project")
-	if err != nil {
-		t.Fatalf("resolveProject: %v", err)
-	}
-	if got == 0 {
-		t.Fatal("want a nonzero project ID")
-	}
-	projects, _ := d.ListProjects(c.ID)
-	if len(projects) != 1 || projects[0].Name != "New Project" {
-		t.Errorf("projects = %+v, want one 'New Project' under the existing client", projects)
-	}
-}
-
-func TestResolveProject_ListClientsError(t *testing.T) {
-	d := newTestDB(t)
-	d.Close()
-	_, err := resolveProject(d, 0, "Acme", 0, "")
-	if err == nil {
-		t.Error("want an error when ListClients fails on a closed db")
-	}
-}
-
-func TestResolveProject_ListProjectsError(t *testing.T) {
-	d := newTestDB(t)
-	c, _ := d.CreateClient("Acme", 0)
-	d.Close()
-	_, err := resolveProject(d, c.ID, "Acme", 0, "Some Project")
-	if err == nil {
-		t.Error("want an error when ListProjects fails on a closed db")
-	}
-}
-
-// ── ensureUncategorizedProject ────────────────────────────────────────────────
-
-func TestEnsureUncategorizedProject_CreatesThenFinds(t *testing.T) {
-	d := newTestDB(t)
-
-	id1, err := ensureUncategorizedProject(d)
-	if err != nil {
-		t.Fatalf("ensureUncategorizedProject (1st call): %v", err)
-	}
-	if id1 == 0 {
-		t.Fatal("want a nonzero project ID")
-	}
-
-	id2, err := ensureUncategorizedProject(d)
-	if err != nil {
-		t.Fatalf("ensureUncategorizedProject (2nd call): %v", err)
-	}
-	if id2 != id1 {
-		t.Errorf("2nd call returned a different project (%d vs %d); want the existing one reused", id2, id1)
-	}
-
-	clients, _ := d.ListClients()
-	count := 0
-	for _, c := range clients {
-		if c.Name == "Uncategorized" {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Errorf("want exactly one 'Uncategorized' client, got %d", count)
-	}
-}
 
 // ── mustLoadEntries ───────────────────────────────────────────────────────────
 
@@ -1998,26 +1826,6 @@ func TestSubmitForm_Edit_UpdateEntryError(t *testing.T) {
 	msg := cmd()
 	if _, ok := msg.(ErrMsg); !ok {
 		t.Errorf("got %T, want ErrMsg from UpdateEntry's FK violation", msg)
-	}
-}
-
-// ── ensureUncategorizedProject: remaining error branch ───────────────────────
-
-func TestEnsureUncategorizedProject_ListClientsError(t *testing.T) {
-	d := newTestDB(t)
-	d.Close()
-	_, err := ensureUncategorizedProject(d)
-	if err == nil {
-		t.Error("want an error when ListClients fails on a closed db")
-	}
-}
-
-func TestEnsureUncategorizedProject_ListProjectsError(t *testing.T) {
-	d, path := newTestDBAtPath(t)
-	dropTableRaw(t, path, "projects")
-	_, err := ensureUncategorizedProject(d)
-	if err == nil {
-		t.Error("want an error when ListProjects fails (projects table missing)")
 	}
 }
 
@@ -2826,5 +2634,41 @@ func TestViewForm_SaveAndCancelButtonFocus(t *testing.T) {
 	m2 := TimersModel{mode: timersModeNew, form: cancelFocused}
 	if got := m2.viewForm(); !strings.Contains(got, "Cancel") {
 		t.Errorf("viewForm() with Cancel focused should still render the Cancel button, got %q", got)
+	}
+}
+
+// Regression: the list view aliases j/k to Up/Down, and the form's Client and
+// Project dropdowns used to reuse those bindings, so typing "j" or "k" moved
+// the dropdown selection instead of inserting the letter.
+func TestUpdateTimerFormFields_JKTypeIntoDropdownFields(t *testing.T) {
+	clients := []*model.Client{mkClient(1, "Acme", 0)}
+	projects := []*model.Project{mkProject(1, "Kanban", clients[0])}
+	for _, tc := range []struct {
+		name  string
+		field int
+	}{
+		{"client", fieldClient},
+		{"project", fieldProject},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newTimerForm(clients, projects)
+			f.focusField(tc.field)
+			for _, r := range "jk" {
+				updateTimerFormFields(&f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			}
+			if got := f.inputs[tc.field].Value(); got != "jk" {
+				t.Errorf("value = %q, want %q", got, "jk")
+			}
+			// Arrow keys still drive the dropdown.
+			f.inputs[tc.field].SetValue("")
+			updateTimerFormFields(&f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+			updateTimerFormFields(&f, tea.KeyMsg{Type: tea.KeyDown})
+			if tc.field == fieldClient && !f.showClientDrop {
+				t.Error("down arrow should open the client dropdown")
+			}
+			if tc.field == fieldProject && !f.showProjectDrop {
+				t.Error("down arrow should open the project dropdown")
+			}
+		})
 	}
 }

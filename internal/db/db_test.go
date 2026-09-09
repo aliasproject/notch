@@ -1,6 +1,7 @@
 package db_test
 
 import (
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,6 +19,37 @@ func newTestDB(t *testing.T) *db.DB {
 	}
 	t.Cleanup(func() { d.Close() })
 	return d
+}
+
+// newTestDBAtPath is like newTestDB but also returns the backing file path,
+// needed by tests that use dropTableRaw to isolate a single DB call's error
+// branch from an earlier call's.
+func newTestDBAtPath(t *testing.T) (*db.DB, string) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := db.Open(path)
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	t.Cleanup(func() { d.Close() })
+	return d, path
+}
+
+// dropTableRaw opens a second raw connection to the same sqlite file backing
+// d and drops the named table, so a specific query against d fails (table
+// missing) while queries against other, untouched tables still succeed.
+func dropTableRaw(t *testing.T, path, table string) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := raw.Exec("DROP TABLE " + table); err != nil {
+		t.Fatalf("drop table %s: %v", table, err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close raw connection: %v", err)
+	}
 }
 
 // ── Clients ──────────────────────────────────────────────────────────────────
@@ -731,5 +763,200 @@ func TestGetProject_NotFoundError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("GetProject error = %q, want it to mention 'not found'", err.Error())
+	}
+}
+
+// ── ResolveOrCreateProject ──────────────────────────────────────────────────
+// Moved here from internal/ui/views (formerly the unexported resolveProject)
+// when it became a DB method so the CLI could share it with the TUI.
+
+func TestResolveOrCreateProject_ExplicitProjectIDShortCircuits(t *testing.T) {
+	d := newTestDB(t)
+	got, err := d.ResolveOrCreateProject(0, "", 5, "")
+	if err != nil {
+		t.Fatalf("ResolveOrCreateProject: %v", err)
+	}
+	if got != 5 {
+		t.Errorf("ResolveOrCreateProject = %d, want 5 (explicit projectID)", got)
+	}
+}
+
+func TestResolveOrCreateProject_BothBlankIsUncategorized(t *testing.T) {
+	d := newTestDB(t)
+	got, err := d.ResolveOrCreateProject(0, "", 0, "")
+	if err != nil {
+		t.Fatalf("ResolveOrCreateProject: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("ResolveOrCreateProject with everything blank = %d, want 0", got)
+	}
+}
+
+func TestResolveOrCreateProject_ExistingClientCaseInsensitiveMatch(t *testing.T) {
+	d := newTestDB(t)
+	c, err := d.CreateClient("Acme", 0)
+	if err != nil {
+		t.Fatalf("CreateClient: %v", err)
+	}
+
+	got, err := d.ResolveOrCreateProject(0, "acme", 0, "New Project")
+	if err != nil {
+		t.Fatalf("ResolveOrCreateProject: %v", err)
+	}
+	if got == 0 {
+		t.Fatal("want a nonzero project ID")
+	}
+	projects, _ := d.ListProjects(c.ID)
+	if len(projects) != 1 || projects[0].Name != "New Project" {
+		t.Errorf("projects for existing client = %+v, want one 'New Project'", projects)
+	}
+	clients, _ := d.ListClients()
+	if len(clients) != 1 {
+		t.Errorf("want the existing client to be reused, not duplicated: %+v", clients)
+	}
+}
+
+func TestResolveOrCreateProject_NewClientCreated(t *testing.T) {
+	d := newTestDB(t)
+	got, err := d.ResolveOrCreateProject(0, "Brand New Client", 0, "")
+	if err != nil {
+		t.Fatalf("ResolveOrCreateProject: %v", err)
+	}
+	if got == 0 {
+		t.Fatal("want a nonzero project ID")
+	}
+	clients, _ := d.ListClients()
+	if len(clients) != 1 || clients[0].Name != "Brand New Client" {
+		t.Errorf("clients = %+v, want one 'Brand New Client'", clients)
+	}
+	// projectName == "" && clientName != "" -> project defaults to the client name.
+	projects, _ := d.ListProjects(clients[0].ID)
+	if len(projects) != 1 || projects[0].Name != "Brand New Client" {
+		t.Errorf("projects = %+v, want project named after the client", projects)
+	}
+}
+
+func TestResolveOrCreateProject_ProjectNameOnlyCreatesClientFromProjectName(t *testing.T) {
+	d := newTestDB(t)
+	got, err := d.ResolveOrCreateProject(0, "", 0, "Standalone Project")
+	if err != nil {
+		t.Fatalf("ResolveOrCreateProject: %v", err)
+	}
+	if got == 0 {
+		t.Fatal("want a nonzero project ID")
+	}
+	clients, _ := d.ListClients()
+	if len(clients) != 1 || clients[0].Name != "Standalone Project" {
+		t.Errorf("clients = %+v, want one client named after the project", clients)
+	}
+}
+
+func TestResolveOrCreateProject_ExistingProjectFoundWithoutDuplicating(t *testing.T) {
+	d := newTestDB(t)
+	c, _ := d.CreateClient("Acme", 0)
+	p, err := d.CreateProject(c.ID, "Website")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	got, err := d.ResolveOrCreateProject(c.ID, "Acme", 0, "website") // case-insensitive match
+	if err != nil {
+		t.Fatalf("ResolveOrCreateProject: %v", err)
+	}
+	if got != p.ID {
+		t.Errorf("ResolveOrCreateProject = %d, want existing project ID %d", got, p.ID)
+	}
+	projects, _ := d.ListProjects(c.ID)
+	if len(projects) != 1 {
+		t.Errorf("want no duplicate project created: %+v", projects)
+	}
+}
+
+func TestResolveOrCreateProject_NewProjectUnderExistingClient(t *testing.T) {
+	d := newTestDB(t)
+	c, _ := d.CreateClient("Acme", 0)
+
+	got, err := d.ResolveOrCreateProject(c.ID, "Acme", 0, "New Project")
+	if err != nil {
+		t.Fatalf("ResolveOrCreateProject: %v", err)
+	}
+	if got == 0 {
+		t.Fatal("want a nonzero project ID")
+	}
+	projects, _ := d.ListProjects(c.ID)
+	if len(projects) != 1 || projects[0].Name != "New Project" {
+		t.Errorf("projects = %+v, want one 'New Project' under the existing client", projects)
+	}
+}
+
+func TestResolveOrCreateProject_ListClientsError(t *testing.T) {
+	d := newTestDB(t)
+	d.Close()
+	_, err := d.ResolveOrCreateProject(0, "Acme", 0, "")
+	if err == nil {
+		t.Error("want an error when ListClients fails on a closed db")
+	}
+}
+
+func TestResolveOrCreateProject_ListProjectsError(t *testing.T) {
+	d := newTestDB(t)
+	c, _ := d.CreateClient("Acme", 0)
+	d.Close()
+	_, err := d.ResolveOrCreateProject(c.ID, "Acme", 0, "Some Project")
+	if err == nil {
+		t.Error("want an error when ListProjects fails on a closed db")
+	}
+}
+
+// ── EnsureUncategorizedProject ──────────────────────────────────────────────
+// Moved here from internal/ui/views (formerly the unexported
+// ensureUncategorizedProject) alongside ResolveOrCreateProject.
+
+func TestEnsureUncategorizedProject_CreatesThenFinds(t *testing.T) {
+	d := newTestDB(t)
+
+	id1, err := d.EnsureUncategorizedProject()
+	if err != nil {
+		t.Fatalf("EnsureUncategorizedProject (1st call): %v", err)
+	}
+	if id1 == 0 {
+		t.Fatal("want a nonzero project ID")
+	}
+
+	id2, err := d.EnsureUncategorizedProject()
+	if err != nil {
+		t.Fatalf("EnsureUncategorizedProject (2nd call): %v", err)
+	}
+	if id2 != id1 {
+		t.Errorf("2nd call returned a different project (%d vs %d); want the existing one reused", id2, id1)
+	}
+
+	clients, _ := d.ListClients()
+	count := 0
+	for _, c := range clients {
+		if c.Name == "Uncategorized" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("want exactly one 'Uncategorized' client, got %d", count)
+	}
+}
+
+func TestEnsureUncategorizedProject_ListClientsError(t *testing.T) {
+	d := newTestDB(t)
+	d.Close()
+	_, err := d.EnsureUncategorizedProject()
+	if err == nil {
+		t.Error("want an error when ListClients fails on a closed db")
+	}
+}
+
+func TestEnsureUncategorizedProject_ListProjectsError(t *testing.T) {
+	d, path := newTestDBAtPath(t)
+	dropTableRaw(t, path, "projects")
+	_, err := d.EnsureUncategorizedProject()
+	if err == nil {
+		t.Error("want an error when ListProjects fails (projects table missing)")
 	}
 }

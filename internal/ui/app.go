@@ -96,6 +96,27 @@ func watchThemeCmd() tea.Cmd {
 	}
 }
 
+// dbWatchMsg is sent when m.dbWatch fires -- an external write to the
+// database (see db.Watch). Unlike themeWatch, this can't be a package-level
+// var: it needs the DB's own path, which isn't known until New() opens it.
+type dbWatchMsg struct{}
+
+// watchDbCmd waits on m.dbWatch and reports it as a dbWatchMsg. Returns nil
+// if there's no watcher to wait on (db.Watch failed to start), in which
+// case TickMsg's own slower fallback reload remains the only path.
+func (m AppModel) watchDbCmd() tea.Cmd {
+	if m.dbWatch == nil {
+		return nil
+	}
+	ch := m.dbWatch
+	return func() tea.Msg {
+		if _, ok := <-ch; !ok {
+			return nil
+		}
+		return dbWatchMsg{}
+	}
+}
+
 // AppModel is the root Bubble Tea model.
 type AppModel struct {
 	db        *db.DB
@@ -106,11 +127,28 @@ type AppModel struct {
 	err       string
 	statusMsg string
 
+	// dbWatch fires shortly after an external write to the database (see
+	// db.Watch) -- the fast path for picking up an entry added/edited by
+	// another process (another notch invocation, or the aliasOS/Omarchy
+	// bar-widget plugin) without waiting on tickFallbackTicks below.
+	dbWatch <-chan struct{}
+	// Counts TickMsg firings (once/second) so the Timers tab's entry list
+	// only gets a *full* reload every tickFallbackInterval ticks as a
+	// fallback, not every single tick -- dbWatch is the fast path; this
+	// just guards against a watch that failed to start or missed an event.
+	tickCount int
+
 	timers   views.TimersModel
 	projects views.ProjectsModel
 	clients  views.ClientsModel
 	reports  views.ReportsModel
 }
+
+// tickFallbackTicks is how many once-a-second TickMsgs pass between the
+// Timers tab's own fallback entry-list reloads, when dbWatch doesn't cover
+// it. 10s is generous slack for "external change dbWatch somehow missed",
+// not the primary way changes are picked up.
+const tickFallbackTicks = 10
 
 type appKeyMap struct {
 	Tab1 key.Binding
@@ -138,6 +176,7 @@ func New(database *db.DB) (AppModel, error) {
 		db:        database,
 		activeTab: TabTimers,
 		running:   running,
+		dbWatch:   db.Watch(database),
 		timers:    views.NewTimers(database),
 		projects:  views.NewProjects(database),
 		clients:   views.NewClients(database),
@@ -149,6 +188,7 @@ func (m AppModel) Init() tea.Cmd {
 	return tea.Batch(
 		tickCmd(),
 		watchThemeCmd(),
+		m.watchDbCmd(),
 		m.timers.Init(),
 		m.projects.Init(),
 		m.clients.Init(),
@@ -174,10 +214,41 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TickMsg:
 		cmds = append(cmds, tickCmd())
 		m.running, _ = m.db.GetRunningEntry()
+		// Fallback only: dbWatch (see the dbWatchMsg case below) is the
+		// fast, primary path for picking up an entry added/edited from
+		// outside this process (another notch invocation, or the
+		// aliasOS/Omarchy bar-widget plugin) -- reloading the full entry
+		// list every single tick regardless of whether anything changed
+		// was wasteful. This just guards against dbWatch having failed to
+		// start or missed an event, so a full reload still happens
+		// eventually (every tickFallbackTicks seconds) rather than never.
+		m.tickCount++
+		if m.tickCount >= tickFallbackTicks {
+			m.tickCount = 0
+			cmds = append(cmds, m.timers.Init())
+		}
 		if theme.CheckReload() {
 			refreshAppTheme()
 			views.RefreshTheme()
 		}
+
+	case dbWatchMsg:
+		cmds = append(cmds, m.watchDbCmd())
+		m.tickCount = 0
+		m.running, _ = m.db.GetRunningEntry()
+		// Reloads the Timers tab's own entry list -- not just the
+		// top-level "is anything running" flag above -- since
+		// TimersModel.entries is a cached snapshot only otherwise
+		// reloaded on its own actions or Init(). Reusing Init() (already
+		// public, already what the tab-switch keybinding calls) rather
+		// than reaching into views' own unexported loadTimerEntriesCmd.
+		// Its timerEntriesMsg result only clamps TimersModel's
+		// cursor/offset into bounds -- it doesn't reset them -- so this
+		// doesn't disrupt scrolling/selection while browsing. Broadcast
+		// to every tab regardless of which is active (same as TickMsg's
+		// own unconditional theme-reload check): the other three tabs
+		// simply have no case for timerEntriesMsg and ignore it.
+		cmds = append(cmds, m.timers.Init())
 
 	case themeWatchMsg:
 		cmds = append(cmds, watchThemeCmd())

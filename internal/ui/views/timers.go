@@ -115,6 +115,15 @@ var timersKeys = timersKeyMap{
 	Cancel:    key.NewBinding(key.WithKeys("esc"), key.WithHelp("esc", "cancel")),
 }
 
+// Dropdown navigation inside the timer form. Deliberately arrow-only: the
+// list keymap above aliases j/k to Up/Down (vim-style), and reusing those
+// bindings while a text input has focus swallows the letters j and k
+// instead of typing them.
+var (
+	dropdownUp   = key.NewBinding(key.WithKeys("up"), key.WithHelp("↑", "up"))
+	dropdownDown = key.NewBinding(key.WithKeys("down"), key.WithHelp("↓", "down"))
+)
+
 // ── Dropdown item ─────────────────────────────────────────────────────────────
 
 type dropdownItem struct {
@@ -881,12 +890,12 @@ func updateTimerFormFields(f *timerForm, msg tea.KeyMsg) (action string, cmd tea
 		case key.Matches(msg, timersKeys.Confirm):
 			f.applyClientSelection()
 			f.focusField(fieldProject)
-		case key.Matches(msg, timersKeys.Up):
+		case key.Matches(msg, dropdownUp):
 			if f.clientSel > 0 {
 				f.clientSel--
 			}
 			f.showClientDrop = true
-		case key.Matches(msg, timersKeys.Down):
+		case key.Matches(msg, dropdownDown):
 			if f.clientSel < len(f.clientMatches)-1 {
 				f.clientSel++
 			}
@@ -914,12 +923,12 @@ func updateTimerFormFields(f *timerForm, msg tea.KeyMsg) (action string, cmd tea
 		case key.Matches(msg, timersKeys.Confirm):
 			f.applyProjectSelection()
 			f.focusField(f.fieldAfterProject())
-		case key.Matches(msg, timersKeys.Up):
+		case key.Matches(msg, dropdownUp):
 			if f.projectSel > 0 {
 				f.projectSel--
 			}
 			f.showProjectDrop = true
-		case key.Matches(msg, timersKeys.Down):
+		case key.Matches(msg, dropdownDown):
 			if f.projectSel < len(f.projectMatches)-1 {
 				f.projectSel++
 			}
@@ -1213,7 +1222,7 @@ func validateTimerForm(f timerForm) (v timerFormValues, errMsg string) {
 // (e.g. reloading whichever list/report the caller displays).
 func submitEditEntryCmd(database *db.DB, entryID int64, v timerFormValues, extra ...tea.Cmd) tea.Cmd {
 	return func() tea.Msg {
-		resolvedProjectID, err := resolveProject(database, v.clientID, v.clientName, v.projectID, v.projectName)
+		resolvedProjectID, err := database.ResolveOrCreateProject(v.clientID, v.clientName, v.projectID, v.projectName)
 		if err != nil {
 			return ErrMsg(err.Error())
 		}
@@ -1274,7 +1283,7 @@ func (m TimersModel) submitForm() (TimersModel, tea.Cmd) {
 	if f.entryID == 0 {
 		// New timer
 		return m, func() tea.Msg {
-			resolvedProjectID, err := resolveProject(m.db, v.clientID, v.clientName, v.projectID, v.projectName)
+			resolvedProjectID, err := m.db.ResolveOrCreateProject(v.clientID, v.clientName, v.projectID, v.projectName)
 			if err != nil {
 				return ErrMsg(err.Error())
 			}
@@ -1287,7 +1296,7 @@ func (m TimersModel) submitForm() (TimersModel, tea.Cmd) {
 				}
 			} else {
 				// No project — start with a placeholder project
-				pid, err := ensureUncategorizedProject(m.db)
+				pid, err := m.db.EnsureUncategorizedProject()
 				if err != nil {
 					return ErrMsg(err.Error())
 				}
@@ -1313,113 +1322,6 @@ func (m TimersModel) submitForm() (TimersModel, tea.Cmd) {
 	)
 }
 
-// resolveProject finds or creates the client+project and returns the project ID.
-// Returns 0 if both clientName and projectName are blank (uncategorized).
-func resolveProject(database *db.DB, clientID int64, clientName string, projectID int64, projectName string) (int64, error) {
-	// If a project was explicitly selected from the dropdown, use it directly.
-	if projectID > 0 {
-		return projectID, nil
-	}
-
-	// Both blank — uncategorized
-	if clientName == "" && projectName == "" {
-		return 0, nil
-	}
-
-	// Resolve/create client
-	if clientID == 0 && clientName != "" {
-		clients, err := database.ListClients()
-		if err != nil {
-			return 0, err
-		}
-		for _, c := range clients {
-			if strings.EqualFold(c.Name, clientName) {
-				clientID = c.ID
-				break
-			}
-		}
-		if clientID == 0 {
-			c, err := database.CreateClient(clientName, 0)
-			if err != nil {
-				return 0, fmt.Errorf("create client %q: %w", clientName, err)
-			}
-			clientID = c.ID
-		}
-	}
-
-	// If only a client was specified with no project name, use client name as project too
-	if projectName == "" && clientName != "" {
-		projectName = clientName
-	}
-
-	// Resolve/create project
-	if projectName != "" {
-		projects, err := database.ListProjects(clientID)
-		if err != nil {
-			return 0, err
-		}
-		for _, p := range projects {
-			if strings.EqualFold(p.Name, projectName) {
-				return p.ID, nil
-			}
-		}
-		// Create project — if no client exists yet, create one with the project name
-		if clientID == 0 {
-			c, err := database.CreateClient(projectName, 0)
-			if err != nil {
-				return 0, fmt.Errorf("create client %q: %w", projectName, err)
-			}
-			clientID = c.ID
-		}
-		p, err := database.CreateProject(clientID, projectName)
-		if err != nil {
-			return 0, fmt.Errorf("create project %q: %w", projectName, err)
-		}
-		return p.ID, nil
-	}
-
-	return 0, nil
-}
-
-// ensureUncategorizedProject returns (or creates) a catch-all project for untagged timers.
-func ensureUncategorizedProject(database *db.DB) (int64, error) {
-	const clientName = "Uncategorized"
-	const projectName = "General"
-
-	clients, err := database.ListClients()
-	if err != nil {
-		return 0, err
-	}
-	var clientID int64
-	for _, c := range clients {
-		if c.Name == clientName {
-			clientID = c.ID
-			break
-		}
-	}
-	if clientID == 0 {
-		c, err := database.CreateClient(clientName, 0)
-		if err != nil {
-			return 0, err
-		}
-		clientID = c.ID
-	}
-
-	projects, err := database.ListProjects(clientID)
-	if err != nil {
-		return 0, err
-	}
-	for _, p := range projects {
-		if p.Name == projectName {
-			return p.ID, nil
-		}
-	}
-	p, err := database.CreateProject(clientID, projectName)
-	if err != nil {
-		return 0, err
-	}
-	return p.ID, nil
-}
 
 func mustLoadEntries(database *db.DB) []*model.Entry {
 	entries, _ := database.ListEntries(0, "", "", true)

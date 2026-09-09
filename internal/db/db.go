@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aliasproject/notch/internal/model"
@@ -62,7 +63,8 @@ CREATE TABLE IF NOT EXISTS entries (
 `
 
 type DB struct {
-	sql *sql.DB
+	sql  *sql.DB
+	path string
 }
 
 // Open opens (or creates) the SQLite database at the given path.
@@ -78,7 +80,14 @@ func Open(path string) (*DB, error) {
 	if _, err := sqldb.Exec(schema); err != nil {
 		return nil, fmt.Errorf("schema: %w", err)
 	}
-	return &DB{sql: sqldb}, nil
+	return &DB{sql: sqldb, path: path}, nil
+}
+
+// Path returns the filesystem path this DB was opened from -- e.g. for
+// Watch, which needs it but isn't itself a DB method (it has to work
+// before/without an open connection, and doesn't want one).
+func (d *DB) Path() string {
+	return d.path
 }
 
 func (d *DB) Close() error { return d.sql.Close() }
@@ -381,6 +390,163 @@ func (d *DB) ReportByProject(dateFrom, dateTo string) ([]*model.ReportRow, error
 		report = append(report, r)
 	}
 	return report, rows.Err()
+}
+
+// ListRecentTasks returns the most recently-used distinct (project, task)
+// pairings, most recent first, each with its accumulated duration across
+// every finished entry that used that exact task string on that project --
+// for a picker that wants to resume a specific named task (e.g. "Meeting"
+// on "Website") rather than just start a bare project. Like
+// ReportByProject, running entries are excluded from the total; a task
+// that's never been finished before won't appear here until it has.
+func (d *DB) ListRecentTasks(limit int) ([]*model.RecentTask, error) {
+	rows, err := d.sql.Query(
+		`SELECT e.project_id, p.name, c.name, e.task,
+                SUM((JULIANDAY(e.end_time) - JULIANDAY(e.start_time)) * 86400) AS total_seconds,
+                MAX(e.start_time) AS last_used
+         FROM entries e
+         JOIN projects p ON p.id = e.project_id
+         JOIN clients  c ON c.id = p.client_id
+         WHERE e.end_time IS NOT NULL
+         GROUP BY e.project_id, e.task
+         ORDER BY last_used DESC
+         LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tasks []*model.RecentTask
+	for rows.Next() {
+		t := &model.RecentTask{}
+		var totalSeconds float64
+		var lastUsed string
+		if err := rows.Scan(&t.ProjectID, &t.ProjectName, &t.ClientName, &t.Task, &totalSeconds, &lastUsed); err != nil {
+			return nil, err
+		}
+		t.TotalSeconds = int64(totalSeconds)
+		t.LastUsed = parseTime(lastUsed)
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+// ResolveOrCreateProject finds or creates the client+project and returns the
+// project ID. Returns 0 if both clientName and projectName are blank
+// (uncategorized). Moved here (from what was internal/ui/views'
+// unexported resolveProject) so the CLI ("notch start --client-name/
+// --project-name") and the TUI's own new-timer form share one
+// implementation instead of the CLI needing its own copy or an import of
+// the ui/views package.
+func (d *DB) ResolveOrCreateProject(clientID int64, clientName string, projectID int64, projectName string) (int64, error) {
+	// If a project was explicitly selected from the dropdown, use it directly.
+	if projectID > 0 {
+		return projectID, nil
+	}
+
+	// Both blank — uncategorized
+	if clientName == "" && projectName == "" {
+		return 0, nil
+	}
+
+	// Resolve/create client
+	if clientID == 0 && clientName != "" {
+		clients, err := d.ListClients()
+		if err != nil {
+			return 0, err
+		}
+		for _, c := range clients {
+			if strings.EqualFold(c.Name, clientName) {
+				clientID = c.ID
+				break
+			}
+		}
+		if clientID == 0 {
+			c, err := d.CreateClient(clientName, 0)
+			if err != nil {
+				return 0, fmt.Errorf("create client %q: %w", clientName, err)
+			}
+			clientID = c.ID
+		}
+	}
+
+	// If only a client was specified with no project name, use client name as project too
+	if projectName == "" && clientName != "" {
+		projectName = clientName
+	}
+
+	// Resolve/create project
+	if projectName != "" {
+		projects, err := d.ListProjects(clientID)
+		if err != nil {
+			return 0, err
+		}
+		for _, p := range projects {
+			if strings.EqualFold(p.Name, projectName) {
+				return p.ID, nil
+			}
+		}
+		// Create project — if no client exists yet, create one with the project name
+		if clientID == 0 {
+			c, err := d.CreateClient(projectName, 0)
+			if err != nil {
+				return 0, fmt.Errorf("create client %q: %w", projectName, err)
+			}
+			clientID = c.ID
+		}
+		p, err := d.CreateProject(clientID, projectName)
+		if err != nil {
+			return 0, fmt.Errorf("create project %q: %w", projectName, err)
+		}
+		return p.ID, nil
+	}
+
+	return 0, nil
+}
+
+// EnsureUncategorizedProject returns (or creates) a catch-all "Uncategorized
+// / General" project for untagged timers -- e.g. a quick-add that only
+// specifies a task, no client/project. Moved here (from what was
+// internal/ui/views' unexported ensureUncategorizedProject) alongside
+// ResolveOrCreateProject, for the same reason: the CLI needs it too, not
+// just the TUI's own new-timer form.
+func (d *DB) EnsureUncategorizedProject() (int64, error) {
+	const clientName = "Uncategorized"
+	const projectName = "General"
+
+	clients, err := d.ListClients()
+	if err != nil {
+		return 0, err
+	}
+	var clientID int64
+	for _, c := range clients {
+		if c.Name == clientName {
+			clientID = c.ID
+			break
+		}
+	}
+	if clientID == 0 {
+		c, err := d.CreateClient(clientName, 0)
+		if err != nil {
+			return 0, err
+		}
+		clientID = c.ID
+	}
+
+	projects, err := d.ListProjects(clientID)
+	if err != nil {
+		return 0, err
+	}
+	for _, p := range projects {
+		if p.Name == projectName {
+			return p.ID, nil
+		}
+	}
+	p, err := d.CreateProject(clientID, projectName)
+	if err != nil {
+		return 0, err
+	}
+	return p.ID, nil
 }
 
 // -- helpers ------------------------------------------------------------------
