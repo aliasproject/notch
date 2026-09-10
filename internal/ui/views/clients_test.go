@@ -574,7 +574,7 @@ func TestClientsView_ListModePopulated(t *testing.T) {
 		},
 	}
 	out := m.View()
-	for _, want := range []string{"NAME", "HOURLY RATE", "Acme", "Globex", "$75.00 / hr"} {
+	for _, want := range []string{"Name", "Hourly Rate", "Acme", "Globex", "$75.00 / hr"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("View() for populated list missing %q; got %q", want, out)
 		}
