@@ -304,7 +304,7 @@ MIT
 
 ## Releasing
 
-Releases are cut by pushing a version tag. The `release` GitHub Actions workflow runs [GoReleaser](https://goreleaser.com), which builds linux/darwin/windows × amd64/arm64 binaries, stamps the version into `notch -v`, and publishes the archives, `checksums.txt`, and a changelog to a GitHub release. `install.sh` and `notch upgrade` both pull from those assets.
+Every push and pull request runs the `ci` workflow: `gofmt -l`, `go vet`, and `go test`. Releases are cut by pushing a version tag. The `release` GitHub Actions workflow runs [GoReleaser](https://goreleaser.com), which builds linux/darwin/windows × amd64/arm64 binaries, stamps the version into `notch -v`, and publishes the archives, `checksums.txt`, and a changelog to a GitHub release. `install.sh` and `notch upgrade` both pull from those assets.
 
 ```sh
 git tag v0.8.0
