@@ -1322,7 +1322,6 @@ func (m TimersModel) submitForm() (TimersModel, tea.Cmd) {
 	)
 }
 
-
 func mustLoadEntries(database *db.DB) []*model.Entry {
 	entries, _ := database.ListEntries(0, "", "", true)
 	return entries

@@ -4,14 +4,14 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aliasproject/notch/internal/db"
+	"github.com/aliasproject/notch/internal/model"
+	"github.com/aliasproject/notch/internal/theme"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/aliasproject/notch/internal/db"
-	"github.com/aliasproject/notch/internal/model"
-	"github.com/aliasproject/notch/internal/theme"
 )
 
 // ── Palette ───────────────────────────────────────────────────────────────────
@@ -301,7 +301,7 @@ func RefreshTheme() {
 
 // ── Gutter cursor ─────────────────────────────────────────────────────────────
 
-const cursorOn  = "▌ "
+const cursorOn = "▌ "
 const cursorOff = "  "
 
 // RowPrefix returns the gutter cursor for a list row. Both variants are

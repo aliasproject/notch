@@ -1545,7 +1545,6 @@ func TestSubmitForm_Edit_Success(t *testing.T) {
 	}
 }
 
-
 // ── mustLoadEntries ───────────────────────────────────────────────────────────
 
 func TestMustLoadEntries(t *testing.T) {
