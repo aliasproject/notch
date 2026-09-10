@@ -43,11 +43,12 @@ sudo mv notch /usr/local/bin/
 
 ```sh
 notch -v              # print the installed version
-notch update -check   # see whether a newer release exists
-notch update          # download and install it in place
+notch version --json  # version, commit, date, Go version, and build source
+notch upgrade --check # see whether a newer release exists
+notch upgrade         # download and install it in place
 ```
 
-`update` fetches the latest [GitHub release](https://github.com/aliasproject/notch/releases) for your OS/arch, verifies it against the release's `checksums.txt`, and swaps the running binary for it. If notch lives somewhere you can't write to (e.g. `/usr/local/bin`), run `sudo notch update`. A binary built from source reports `dev` and is left alone unless you pass `-force`.
+`upgrade` fetches the latest [GitHub release](https://github.com/aliasproject/notch/releases) for your OS/arch, verifies it against the release's `checksums.txt`, and swaps the running binary for it. If notch lives somewhere you can't write to (e.g. `/usr/local/bin`), run `sudo notch upgrade`. A binary built from source reports `dev` and is left alone unless you pass `--force`. `notch update` still works as an alias.
 
 ---
 
@@ -303,7 +304,7 @@ MIT
 
 ## Releasing
 
-Releases are cut by pushing a version tag. The `release` GitHub Actions workflow runs [GoReleaser](https://goreleaser.com), which builds linux/darwin/windows × amd64/arm64 binaries, stamps the version into `notch -v`, and publishes the archives, `checksums.txt`, and a changelog to a GitHub release. `install.sh` and `notch update` both pull from those assets.
+Releases are cut by pushing a version tag. The `release` GitHub Actions workflow runs [GoReleaser](https://goreleaser.com), which builds linux/darwin/windows × amd64/arm64 binaries, stamps the version into `notch -v`, and publishes the archives, `checksums.txt`, and a changelog to a GitHub release. `install.sh` and `notch upgrade` both pull from those assets.
 
 ```sh
 git tag v0.8.0

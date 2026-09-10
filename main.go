@@ -33,11 +33,14 @@ var (
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "-v", "--version", "version":
+		case "-v", "--version":
 			fmt.Println(versionString())
 			return
-		case "update":
-			runUpdate(os.Args[2:])
+		case "version":
+			runVersion(os.Args[2:])
+			return
+		case "upgrade", "update":
+			runUpgrade(os.Args[2:])
 			return
 		case "status":
 			runStatus(os.Args[2:])
@@ -544,6 +547,22 @@ func buildDetails() []string {
 	return out
 }
 
+// buildSource names where this binary came from: "release" for a
+// goreleaser-stamped build, "go install" for a module build whose version
+// Go recorded at build time, and "dev" for a plain "go build" of a checkout.
+// Only "release" builds are guaranteed to have a matching GitHub asset for
+// "notch upgrade" to swap in.
+func buildSource() string {
+	switch {
+	case version != "dev":
+		return "release"
+	case currentVersion() != "dev":
+		return "go install"
+	default:
+		return "dev"
+	}
+}
+
 func versionString() string {
 	v := currentVersion()
 	if update.Comparable(v) && !strings.HasPrefix(v, "v") {
@@ -556,13 +575,60 @@ func versionString() string {
 	return s + " " + runtime.GOOS + "/" + runtime.GOARCH
 }
 
-// runUpdate checks GitHub for a newer release and, unless -check is given,
+// versionOutput is the JSON shape for "version --json": everything the
+// one-line form shows plus the Go toolchain and how the binary was built,
+// for bug reports and scripts that gate on a minimum version.
+type versionOutput struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit,omitempty"`
+	Date    string `json:"date,omitempty"`
+	Go      string `json:"go"`
+	OS      string `json:"os"`
+	Arch    string `json:"arch"`
+	Source  string `json:"source"`
+}
+
+// runVersion prints the installed version: the same one-liner as -v by
+// default, or the full build details as JSON with -json.
+func runVersion(args []string) {
+	fs := flag.NewFlagSet("version", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "output version, commit, date, Go version and build source as JSON")
+	fs.Parse(args)
+
+	if !*jsonOut {
+		fmt.Println(versionString())
+		return
+	}
+
+	out := versionOutput{
+		Version: strings.TrimPrefix(currentVersion(), "v"),
+		Go:      runtime.Version(),
+		OS:      runtime.GOOS,
+		Arch:    runtime.GOARCH,
+		Source:  buildSource(),
+	}
+	if details := buildDetails(); len(details) > 0 {
+		out.Commit = details[0]
+		if len(details) > 1 {
+			out.Date = details[1]
+		}
+	}
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(out); err != nil {
+		fmt.Fprintf(os.Stderr, "error encoding version: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runUpgrade checks GitHub for a newer release and, unless -check is given,
 // downloads it and replaces the running executable in place. Local
-// builds ("dev") have no version to compare against, so they only update
+// builds ("dev") have no version to compare against, so they only upgrade
 // with -force -- otherwise a developer's working binary would be clobbered
-// by whatever happens to be the latest tag.
-func runUpdate(args []string) {
-	fs := flag.NewFlagSet("update", flag.ExitOnError)
+// by whatever happens to be the latest tag. "update" is accepted as an
+// alias since that was the command's original name.
+func runUpgrade(args []string) {
+	fs := flag.NewFlagSet("upgrade", flag.ExitOnError)
 	check := fs.Bool("check", false, "only report whether an update is available; don't install")
 	force := fs.Bool("force", false, "install the latest release even if it isn't newer than this build")
 	fs.Parse(args)
@@ -582,12 +648,12 @@ func runUpdate(args []string) {
 		fmt.Printf("notch %s is a local build; latest release is %s.\n", cur, rel.Tag)
 		if !*force {
 			if !*check {
-				fmt.Println("Run 'notch update -force' to replace it with the latest release.")
+				fmt.Println("Run 'notch upgrade -force' to replace it with the latest release.")
 			}
 			return
 		}
 	case update.IsNewer(cur, rel.Tag):
-		fmt.Printf("notch v%s -> %s available.\n", strings.TrimPrefix(cur, "v"), rel.Tag)
+		fmt.Printf("update available: notch v%s -> %s\n", strings.TrimPrefix(cur, "v"), rel.Tag)
 	default:
 		fmt.Printf("notch v%s is up to date.\n", strings.TrimPrefix(cur, "v"))
 		if !*force {
@@ -608,7 +674,7 @@ func runUpdate(args []string) {
 	if err := client.Apply(ctx, rel, runtime.GOOS, runtime.GOARCH, exe); err != nil {
 		fmt.Fprintf(os.Stderr, "error installing update: %v\n", err)
 		if os.IsPermission(err) || strings.Contains(err.Error(), "permission denied") {
-			fmt.Fprintf(os.Stderr, "hint: %s isn't writable by you -- try 'sudo notch update'\n", filepath.Dir(exe))
+			fmt.Fprintf(os.Stderr, "hint: %s isn't writable by you -- try 'sudo notch upgrade'\n", filepath.Dir(exe))
 		}
 		os.Exit(1)
 	}
