@@ -641,10 +641,14 @@ func (m AppModel) renderBody() string {
 		view = m.reports.View()
 	}
 
-	// Content column — no background set so terminal default shows through cleanly
+	// Content column. Height is a minimum (pads short views to fill the
+	// space); MaxHeight is the hard ceiling: on a very short terminal a
+	// view's fixed lines can exceed ch, and without clipping the whole
+	// frame grows past m.height and scrolls the top bar off-screen.
 	column := lipgloss.NewStyle().
 		Width(cw).
 		Height(ch).
+		MaxHeight(ch).
 		Background(appColorBg).
 		Padding(1, 3).
 		Render(view)

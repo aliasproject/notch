@@ -837,7 +837,16 @@ func (m ReportsModel) entryCols() (date, task, dur, earned, status int) {
 	// overflow) off the top of the screen.
 	task = usableWidth(m.width) - (2 + date + dur + earned + status)
 	if task < 20 {
-		task = 20
+		// Narrow terminal: tighten the fixed columns to their widest
+		// content ("Sep 10, 2026", "12:34:56", "$1234.56", "invoiced")
+		// before squeezing TASK. Flooring TASK at 20 without doing this
+		// made the row wider than the outer column at widths under ~80,
+		// so every header and entry row wrapped onto a second line.
+		date, dur, earned, status = 13, 10, 10, 9
+		task = usableWidth(m.width) - (2 + date + dur + earned + status)
+		if task < 8 {
+			task = 8
+		}
 	}
 	return date, task, dur, earned, status
 }
