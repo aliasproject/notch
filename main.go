@@ -67,6 +67,9 @@ func main() {
 		case "edit":
 			runEdit(os.Args[2:])
 			return
+		case "delete":
+			runDelete(os.Args[2:])
+			return
 		case "watch":
 			runWatch(os.Args[2:])
 			return
@@ -482,6 +485,39 @@ func runEdit(args []string) {
 
 	if err := database.UpdateEntry(target); err != nil {
 		fmt.Fprintf(os.Stderr, "error updating entry: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// runDelete permanently removes one entry -- by default the running one,
+// for discarding an accidental start without leaving a stray short entry
+// behind (stop would keep it). Like "edit", --id targets a specific entry
+// instead. No confirmation prompt here: callers (the TUI, the bar-widget
+// plugin) confirm before invoking it.
+func runDelete(args []string) {
+	fs := flag.NewFlagSet("delete", flag.ExitOnError)
+	entryID := fs.Int64("id", 0, "entry ID to delete (default: the currently-running entry)")
+	fs.Parse(args)
+
+	database := openDBOrExit()
+	defer database.Close()
+
+	id := *entryID
+	if id <= 0 {
+		entry, err := database.GetRunningEntry()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error reading running entry: %v\n", err)
+			os.Exit(1)
+		}
+		if entry == nil {
+			fmt.Fprintln(os.Stderr, "error: no timer is running -- pass --id <entry> to delete a specific one")
+			os.Exit(1)
+		}
+		id = entry.ID
+	}
+
+	if err := database.DeleteEntry(id); err != nil {
+		fmt.Fprintf(os.Stderr, "error deleting entry: %v\n", err)
 		os.Exit(1)
 	}
 }
