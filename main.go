@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/aliasproject/notch/internal/db"
 	"github.com/aliasproject/notch/internal/model"
@@ -44,6 +45,9 @@ func main() {
 			return
 		case "status":
 			runStatus(os.Args[2:])
+			return
+		case "summary":
+			runSummary(os.Args[2:])
 			return
 		case "projects":
 			runProjects(os.Args[2:])
@@ -122,6 +126,40 @@ func runStatus(args []string) {
 	} else {
 		fmt.Println(status.FormatText(entry))
 	}
+}
+
+// runSummary prints how much time was tracked today and this week, for
+// status bars that show a running daily total next to the live timer.
+// Only finished entries are counted -- see status.Summary.
+func runSummary(args []string) {
+	fs := flag.NewFlagSet("summary", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "output as JSON")
+	fs.Parse(args)
+
+	database := openDBOrExit()
+	defer database.Close()
+
+	// ListEntries filters on the UTC date of start_time, so widen the
+	// range by a day on each side and let Summarize clip to local time.
+	now := time.Now()
+	from := status.StartOfWeek(now).AddDate(0, 0, -1).Format("2006-01-02")
+	to := now.AddDate(0, 0, 1).Format("2006-01-02")
+	entries, err := database.ListEntries(0, from, to, false)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error listing entries: %v\n", err)
+		os.Exit(1)
+	}
+
+	s := status.Summarize(entries, now)
+	if *jsonOut {
+		b, err := json.Marshal(s)
+		if err != nil {
+			panic(err) // Summary is a flat struct of ints -- cannot fail
+		}
+		fmt.Println(string(b))
+		return
+	}
+	fmt.Printf("today\t%s\nweek\t%s\n", formatSeconds(s.TodaySeconds), formatSeconds(s.WeekSeconds))
 }
 
 // projectOutput is the JSON shape for the "projects" subcommand, used by
