@@ -74,3 +74,19 @@ func TestEntryEarnings(t *testing.T) {
 		t.Errorf("Earnings(0) = %v, want %v", got, want)
 	}
 }
+
+func TestParseEditTime(t *testing.T) {
+	got, err := ParseEditTime("2026-09-24T16:05:00Z")
+	if err != nil || !got.Equal(time.Date(2026, 9, 24, 16, 5, 0, 0, time.UTC)) {
+		t.Errorf("RFC3339: got %v, %v", got, err)
+	}
+	got, err = ParseEditTime(" 2026-09-24 09:05 ")
+	if err != nil || !got.Equal(time.Date(2026, 9, 24, 9, 5, 0, 0, time.Local)) {
+		t.Errorf("local form: got %v, %v", got, err)
+	}
+	for _, bad := range []string{"", "9:05", "2026-09-24", "tomorrow"} {
+		if _, err := ParseEditTime(bad); err == nil {
+			t.Errorf("ParseEditTime(%q) should fail", bad)
+		}
+	}
+}

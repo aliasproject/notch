@@ -289,6 +289,19 @@ func (d *DB) DeleteTaskEntries(projectID int64, task string) (int64, error) {
 	return res.RowsAffected()
 }
 
+// UpdateTaskEntries re-files every entry of one (project, task) pairing
+// under another -- a rename, a move to a different project, or both --
+// and returns how many entries changed. If the target pairing already
+// has entries, the two simply merge into one ListRecentTasks row.
+func (d *DB) UpdateTaskEntries(fromProjectID int64, fromTask string, toProjectID int64, toTask string) (int64, error) {
+	res, err := d.sql.Exec(`UPDATE entries SET project_id=?, task=? WHERE project_id=? AND task=?`,
+		toProjectID, toTask, fromProjectID, fromTask)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (d *DB) GetRunningEntry() (*model.Entry, error) {
 	rows, err := d.sql.Query(
 		`SELECT e.id, e.project_id, e.task, e.start_time, e.end_time,

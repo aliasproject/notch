@@ -498,26 +498,81 @@ func runStop(args []string) {
 	}
 }
 
-// runEdit updates an existing entry's client/project/task/notes -- most
-// often the currently-running one (the default target when --id is
-// omitted), for turning a quick-add's placeholder Uncategorized project
-// into a real one after the fact. Mirrors the TUI's own edit-entry path
-// (internal/ui/views/timers.go's submitEditEntryCmd): resolve-or-create
-// the project the same way (db.ResolveOrCreateProject), then apply only
-// the fields actually given and UpdateEntry. An empty --task/--notes means
-// "leave it as it is", not "clear it" -- there's no way to blank either
-// out through this command.
+// runEdit updates entries, in one of two modes.
+//
+// One entry (--id, or the running entry when --id is omitted): its
+// client/project/task/notes, plus --start/--end times. Mirrors the TUI's
+// own edit-entry path (internal/ui/views/timers.go's submitEditEntryCmd):
+// resolve-or-create the project the same way (db.ResolveOrCreateProject),
+// then apply only the fields actually given and UpdateEntry. An empty
+// --task means "leave it as it is"; --notes given explicitly, even empty,
+// replaces the notes (so --notes "" clears them).
+//
+// A whole task (--from-project with --from-task): renames and/or re-files
+// every entry of that pairing (db.UpdateTaskEntries), merging into an
+// existing pairing if the result matches one. Only --task/--client-name/
+// --project-name apply there; per-entry fields (--start/--end/--notes)
+// are rejected.
 func runEdit(args []string) {
 	fs := flag.NewFlagSet("edit", flag.ExitOnError)
 	entryID := fs.Int64("id", 0, "entry ID to edit (default: the currently-running entry)")
+	fromProject := fs.Int64("from-project", 0, "with --from-task: edit every entry of this project+task instead of one entry")
+	fromTask := fs.String("from-task", "", "with --from-project: the task description, matched exactly")
 	clientName := fs.String("client-name", "", "client name -- resolved to an existing client or created (case-insensitive match)")
 	projectName := fs.String("project-name", "", "project name -- resolved to an existing project or created (case-insensitive match, scoped to the client)")
 	task := fs.String("task", "", "new task description (omit to keep the current one)")
-	notes := fs.String("notes", "", "new notes (omit to keep the current ones)")
+	notes := fs.String("notes", "", "new notes; pass --notes \"\" to clear them")
+	start := fs.String("start", "", "new start time: RFC3339 or local \"YYYY-MM-DD HH:MM\"")
+	end := fs.String("end", "", "new end time (stops a running entry at that time): RFC3339 or local \"YYYY-MM-DD HH:MM\"")
 	fs.Parse(args)
+
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 
 	database := openDBOrExit()
 	defer database.Close()
+
+	resolveProject := func() int64 {
+		if *clientName == "" && *projectName == "" {
+			return 0
+		}
+		id, err := database.ResolveOrCreateProject(0, *clientName, 0, *projectName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error resolving project: %v\n", err)
+			os.Exit(1)
+		}
+		return id
+	}
+
+	if given["from-project"] || given["from-task"] {
+		if *entryID > 0 {
+			fmt.Fprintln(os.Stderr, "error: use either --id or --from-project/--from-task, not both")
+			os.Exit(1)
+		}
+		if *fromProject <= 0 {
+			fmt.Fprintln(os.Stderr, "error: --from-task needs --from-project")
+			os.Exit(1)
+		}
+		if given["start"] || given["end"] || given["notes"] {
+			fmt.Fprintln(os.Stderr, "error: --start/--end/--notes apply to one entry (--id), not a whole task")
+			os.Exit(1)
+		}
+		toProject := *fromProject
+		if id := resolveProject(); id > 0 {
+			toProject = id
+		}
+		toTask := *fromTask
+		if *task != "" {
+			toTask = *task
+		}
+		n, err := database.UpdateTaskEntries(*fromProject, *fromTask, toProject, toTask)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error updating entries: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("updated %d entries\n", n)
+		return
+	}
 
 	var target *model.Entry
 	if *entryID > 0 {
@@ -549,21 +604,43 @@ func runEdit(args []string) {
 		target = entry
 	}
 
-	if *clientName != "" || *projectName != "" {
-		resolvedProjectID, err := database.ResolveOrCreateProject(0, *clientName, 0, *projectName)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error resolving project: %v\n", err)
-			os.Exit(1)
-		}
-		if resolvedProjectID > 0 {
-			target.ProjectID = resolvedProjectID
-		}
+	if id := resolveProject(); id > 0 {
+		target.ProjectID = id
 	}
 	if *task != "" {
 		target.Task = *task
 	}
-	if *notes != "" {
+	if given["notes"] {
 		target.Notes = *notes
+	}
+
+	// Same rules as the TUI's own edit form (validateTimerForm): end not
+	// before start. Also nothing in the future -- a time tracker records
+	// time already spent.
+	now := time.Now()
+	if given["start"] {
+		t, err := model.ParseEditTime(*start)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: --start: %v\n", err)
+			os.Exit(1)
+		}
+		target.StartTime = t
+	}
+	if given["end"] {
+		t, err := model.ParseEditTime(*end)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: --end: %v\n", err)
+			os.Exit(1)
+		}
+		target.EndTime = &t
+	}
+	if target.StartTime.After(now) || (target.EndTime != nil && target.EndTime.After(now)) {
+		fmt.Fprintln(os.Stderr, "error: times can't be in the future")
+		os.Exit(1)
+	}
+	if target.EndTime != nil && target.EndTime.Before(target.StartTime) {
+		fmt.Fprintln(os.Stderr, "error: end time must not be before the start time")
+		os.Exit(1)
 	}
 
 	if err := database.UpdateEntry(target); err != nil {

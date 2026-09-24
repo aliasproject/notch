@@ -1042,3 +1042,53 @@ func TestListRecentTasks_BillingCounts(t *testing.T) {
 		t.Errorf("counts = %d/%d/%d (entries/invoiced/paid), want 3/2/1", got.EntryCount, got.InvoicedCount, got.PaidCount)
 	}
 }
+
+func TestUpdateTaskEntries_RenameMoveAndMerge(t *testing.T) {
+	d := newTestDB(t)
+	p := mustProject(t, d)
+	other, err := d.CreateProject(p.ClientID, "Other")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	finished := func(projectID int64, task string) {
+		t.Helper()
+		e, err := d.StartEntry(projectID, task)
+		if err != nil {
+			t.Fatalf("StartEntry: %v", err)
+		}
+		if err := d.StopEntry(e.ID); err != nil {
+			t.Fatalf("StopEntry: %v", err)
+		}
+	}
+	finished(p.ID, "Appointment View")
+	finished(p.ID, "Appointment View")
+	finished(other.ID, "Appointments View")
+	finished(p.ID, "untouched")
+
+	// Rename + move onto an existing pairing: the two merge.
+	n, err := d.UpdateTaskEntries(p.ID, "Appointment View", other.ID, "Appointments View")
+	if err != nil {
+		t.Fatalf("UpdateTaskEntries: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("updated %d entries, want 2", n)
+	}
+
+	tasks, err := d.ListRecentTasks(10)
+	if err != nil {
+		t.Fatalf("ListRecentTasks: %v", err)
+	}
+	counts := map[string]int{}
+	for _, rt := range tasks {
+		counts[rt.ProjectName+"/"+rt.Task] = rt.EntryCount
+	}
+	if counts["Other/Appointments View"] != 3 {
+		t.Errorf("merged task has %d entries, want 3 (got %v)", counts["Other/Appointments View"], counts)
+	}
+	if _, ok := counts["Website/Appointment View"]; ok {
+		t.Errorf("old pairing should be gone, got %v", counts)
+	}
+	if counts["Website/untouched"] != 1 {
+		t.Errorf("unrelated task changed: %v", counts)
+	}
+}
