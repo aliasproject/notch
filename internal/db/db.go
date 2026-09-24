@@ -277,6 +277,18 @@ func (d *DB) DeleteEntry(id int64) error {
 	return err
 }
 
+// DeleteTaskEntries deletes every entry for one (project, task) pairing --
+// the same grouping ListRecentTasks reports -- including a running one,
+// and returns how many were removed. Same-named tasks on other projects
+// are a different pairing and are left alone.
+func (d *DB) DeleteTaskEntries(projectID int64, task string) (int64, error) {
+	res, err := d.sql.Exec(`DELETE FROM entries WHERE project_id=? AND task=?`, projectID, task)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 func (d *DB) GetRunningEntry() (*model.Entry, error) {
 	rows, err := d.sql.Query(
 		`SELECT e.id, e.project_id, e.task, e.start_time, e.end_time,
@@ -403,7 +415,8 @@ func (d *DB) ListRecentTasks(limit int) ([]*model.RecentTask, error) {
 	rows, err := d.sql.Query(
 		`SELECT e.project_id, p.name, c.name, e.task,
                 SUM((JULIANDAY(e.end_time) - JULIANDAY(e.start_time)) * 86400) AS total_seconds,
-                MAX(e.start_time) AS last_used
+                MAX(e.start_time) AS last_used,
+                COUNT(*), SUM(e.invoiced), SUM(e.paid)
          FROM entries e
          JOIN projects p ON p.id = e.project_id
          JOIN clients  c ON c.id = p.client_id
@@ -421,7 +434,8 @@ func (d *DB) ListRecentTasks(limit int) ([]*model.RecentTask, error) {
 		t := &model.RecentTask{}
 		var totalSeconds float64
 		var lastUsed string
-		if err := rows.Scan(&t.ProjectID, &t.ProjectName, &t.ClientName, &t.Task, &totalSeconds, &lastUsed); err != nil {
+		if err := rows.Scan(&t.ProjectID, &t.ProjectName, &t.ClientName, &t.Task, &totalSeconds, &lastUsed,
+			&t.EntryCount, &t.InvoicedCount, &t.PaidCount); err != nil {
 			return nil, err
 		}
 		t.TotalSeconds = int64(totalSeconds)

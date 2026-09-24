@@ -67,6 +67,9 @@ func main() {
 		case "edit":
 			runEdit(os.Args[2:])
 			return
+		case "entries":
+			runEntries(os.Args[2:])
+			return
 		case "delete":
 			runDelete(os.Args[2:])
 			return
@@ -282,11 +285,14 @@ func formatSeconds(s int64) string {
 // previously-used tasks so a picker can resume "Meeting on Website"
 // instead of just starting a bare project with no task text.
 type taskOutput struct {
-	ProjectID    int64  `json:"projectId"`
-	ProjectName  string `json:"projectName"`
-	ClientName   string `json:"clientName"`
-	Task         string `json:"task"`
-	TotalSeconds int64  `json:"totalSeconds"`
+	ProjectID     int64  `json:"projectId"`
+	ProjectName   string `json:"projectName"`
+	ClientName    string `json:"clientName"`
+	Task          string `json:"task"`
+	TotalSeconds  int64  `json:"totalSeconds"`
+	EntryCount    int    `json:"entryCount"`
+	InvoicedCount int    `json:"invoicedCount"`
+	PaidCount     int    `json:"paidCount"`
 }
 
 // runTasks lists the most recently-used distinct (project, task) pairings,
@@ -312,6 +318,7 @@ func runTasks(args []string) {
 			out[i] = taskOutput{
 				ProjectID: t.ProjectID, ProjectName: t.ProjectName,
 				ClientName: t.ClientName, Task: t.Task, TotalSeconds: t.TotalSeconds,
+				EntryCount: t.EntryCount, InvoicedCount: t.InvoicedCount, PaidCount: t.PaidCount,
 			}
 		}
 		b, err := json.Marshal(out)
@@ -324,6 +331,82 @@ func runTasks(args []string) {
 
 	for _, t := range tasks {
 		fmt.Printf("%s\t%s › %s\t%s\n", t.Task, t.ProjectName, t.ClientName, formatSeconds(t.TotalSeconds))
+	}
+}
+
+// entryOutput is the JSON shape for the "entries" subcommand: one task's
+// individual sessions, for the bar-widget plugin's expandable rows (which
+// delete them one at a time via "delete --id"). EndTime is omitted for the
+// running entry; DurationSeconds is its elapsed time so far.
+type entryOutput struct {
+	ID              int64  `json:"id"`
+	StartTime       string `json:"startTime"`
+	EndTime         string `json:"endTime,omitempty"`
+	DurationSeconds int64  `json:"durationSeconds"`
+	Invoiced        bool   `json:"invoiced"`
+	Paid            bool   `json:"paid"`
+	Notes           string `json:"notes,omitempty"`
+}
+
+// runEntries lists one (project, task) pairing's entries, newest first --
+// the sessions behind a single "tasks" row.
+func runEntries(args []string) {
+	fs := flag.NewFlagSet("entries", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "output as JSON")
+	projectID := fs.Int64("project", 0, "project ID (see 'notch tasks -json')")
+	task := fs.String("task", "", "task description, matched exactly")
+	limit := fs.Int("limit", 20, "max entries to list")
+	fs.Parse(args)
+
+	if *projectID <= 0 {
+		fmt.Fprintln(os.Stderr, "error: --project is required")
+		os.Exit(1)
+	}
+
+	database := openDBOrExit()
+	defer database.Close()
+
+	all, err := database.ListEntries(*projectID, "", "", true)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error listing entries: %v\n", err)
+		os.Exit(1)
+	}
+	var entries []*model.Entry
+	for _, e := range all {
+		if e.Task == *task {
+			entries = append(entries, e)
+			if len(entries) >= *limit {
+				break
+			}
+		}
+	}
+
+	if *jsonOut {
+		out := make([]entryOutput, len(entries))
+		for i, e := range entries {
+			out[i] = entryOutput{
+				ID: e.ID, StartTime: e.StartTime.Format(time.RFC3339),
+				DurationSeconds: int64(e.Duration() / time.Second),
+				Invoiced:        e.Invoiced, Paid: e.Paid, Notes: e.Notes,
+			}
+			if e.EndTime != nil {
+				out[i].EndTime = e.EndTime.Format(time.RFC3339)
+			}
+		}
+		b, err := json.Marshal(out)
+		if err != nil {
+			panic(err) // entryOutput is a flat struct of strings/ints/bools -- cannot fail
+		}
+		fmt.Println(string(b))
+		return
+	}
+
+	for _, e := range entries {
+		end := "running"
+		if e.EndTime != nil {
+			end = e.EndTime.Local().Format("15:04")
+		}
+		fmt.Printf("%d\t%s–%s\t%s\n", e.ID, e.StartTime.Local().Format("2006-01-02 15:04"), end, formatSeconds(int64(e.Duration()/time.Second)))
 	}
 }
 
@@ -489,15 +572,44 @@ func runEdit(args []string) {
 	}
 }
 
-// runDelete permanently removes one entry -- by default the running one,
-// for discarding an accidental start without leaving a stray short entry
-// behind (stop would keep it). Like "edit", --id targets a specific entry
-// instead. No confirmation prompt here: callers (the TUI, the bar-widget
-// plugin) confirm before invoking it.
+// runDelete permanently removes entries: by default the running one, for
+// discarding an accidental start without leaving a stray short entry
+// behind (stop would keep it); --id for one specific entry; or --project
+// with --task for every entry of that pairing (one "tasks" row, running
+// entry included -- see db.DeleteTaskEntries). No confirmation prompt
+// here: callers (the bar-widget plugin) confirm before invoking it.
 func runDelete(args []string) {
 	fs := flag.NewFlagSet("delete", flag.ExitOnError)
 	entryID := fs.Int64("id", 0, "entry ID to delete (default: the currently-running entry)")
+	projectID := fs.Int64("project", 0, "with --task: delete every entry of this project+task")
+	task := fs.String("task", "", "with --project: the task description, matched exactly")
 	fs.Parse(args)
+
+	taskSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "task" {
+			taskSet = true
+		}
+	})
+	if *projectID > 0 || taskSet {
+		if *entryID > 0 {
+			fmt.Fprintln(os.Stderr, "error: use either --id or --project/--task, not both")
+			os.Exit(1)
+		}
+		if *projectID <= 0 {
+			fmt.Fprintln(os.Stderr, "error: --task needs --project")
+			os.Exit(1)
+		}
+		database := openDBOrExit()
+		defer database.Close()
+		n, err := database.DeleteTaskEntries(*projectID, *task)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error deleting entries: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("deleted %d entries\n", n)
+		return
+	}
 
 	database := openDBOrExit()
 	defer database.Close()

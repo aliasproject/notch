@@ -81,4 +81,10 @@ type RecentTask struct {
 	Task         string
 	TotalSeconds int64
 	LastUsed     time.Time
+	// Billing status across the task's finished entries, so a picker can
+	// show "2/3 invoiced" without listing every entry. Paid implies
+	// invoiced, so PaidCount <= InvoicedCount <= EntryCount.
+	EntryCount    int
+	InvoicedCount int
+	PaidCount     int
 }

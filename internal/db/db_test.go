@@ -960,3 +960,85 @@ func TestEnsureUncategorizedProject_ListProjectsError(t *testing.T) {
 		t.Error("want an error when ListProjects fails (projects table missing)")
 	}
 }
+
+func TestDeleteTaskEntries_OnlyThatProjectAndTask(t *testing.T) {
+	d := newTestDB(t)
+	p := mustProject(t, d)
+	other, err := d.CreateProject(p.ClientID, "Other")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	for _, spec := range []struct {
+		projectID int64
+		task      string
+	}{{p.ID, "meeting"}, {p.ID, "meeting"}, {p.ID, "build"}, {other.ID, "meeting"}} {
+		e, err := d.StartEntry(spec.projectID, spec.task)
+		if err != nil {
+			t.Fatalf("StartEntry: %v", err)
+		}
+		if err := d.StopEntry(e.ID); err != nil {
+			t.Fatalf("StopEntry: %v", err)
+		}
+	}
+	// A running entry of the same task goes too.
+	if _, err := d.StartEntry(p.ID, "meeting"); err != nil {
+		t.Fatalf("StartEntry: %v", err)
+	}
+
+	n, err := d.DeleteTaskEntries(p.ID, "meeting")
+	if err != nil {
+		t.Fatalf("DeleteTaskEntries: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("deleted %d entries, want 3", n)
+	}
+
+	left, _ := d.ListEntries(0, "", "", true)
+	if len(left) != 2 {
+		t.Fatalf("entries left = %d, want 2 (build, and meeting on the other project)", len(left))
+	}
+	for _, e := range left {
+		if e.ProjectID == p.ID && e.Task == "meeting" {
+			t.Errorf("entry %d (%s on project %d) should have been deleted", e.ID, e.Task, e.ProjectID)
+		}
+	}
+}
+
+func TestListRecentTasks_BillingCounts(t *testing.T) {
+	d := newTestDB(t)
+	p := mustProject(t, d)
+
+	var ids []int64
+	for i := 0; i < 3; i++ {
+		e, err := d.StartEntry(p.ID, "meeting")
+		if err != nil {
+			t.Fatalf("StartEntry: %v", err)
+		}
+		if err := d.StopEntry(e.ID); err != nil {
+			t.Fatalf("StopEntry: %v", err)
+		}
+		ids = append(ids, e.ID)
+	}
+	if err := d.SetEntryInvoiced(ids[0], true); err != nil {
+		t.Fatalf("SetEntryInvoiced: %v", err)
+	}
+	if err := d.SetEntryInvoiced(ids[1], true); err != nil {
+		t.Fatalf("SetEntryInvoiced: %v", err)
+	}
+	if err := d.SetEntryPaid(ids[1], true); err != nil {
+		t.Fatalf("SetEntryPaid: %v", err)
+	}
+
+	tasks, err := d.ListRecentTasks(10)
+	if err != nil {
+		t.Fatalf("ListRecentTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %d, want 1", len(tasks))
+	}
+	got := tasks[0]
+	if got.EntryCount != 3 || got.InvoicedCount != 2 || got.PaidCount != 1 {
+		t.Errorf("counts = %d/%d/%d (entries/invoiced/paid), want 3/2/1", got.EntryCount, got.InvoicedCount, got.PaidCount)
+	}
+}
