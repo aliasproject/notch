@@ -356,8 +356,12 @@ func runEntries(args []string) {
 	limit := fs.Int("limit", 20, "max entries to list")
 	fs.Parse(args)
 
-	if *projectID <= 0 {
-		fmt.Fprintln(os.Stderr, "error: --project is required")
+	// --task is required, like delete's: a blank task is a real pairing,
+	// so a forgotten --task must not quietly list the blank-task entries.
+	taskGiven := false
+	fs.Visit(func(f *flag.Flag) { taskGiven = taskGiven || f.Name == "task" })
+	if *projectID <= 0 || !taskGiven {
+		fmt.Fprintln(os.Stderr, "error: --project <id> and --task <task> are required")
 		os.Exit(1)
 	}
 	if *limit < 1 {
@@ -586,6 +590,10 @@ func runEdit(args []string) {
 		n, err := database.UpdateTaskEntries(*fromProject, *fromTask, toProject, toTask)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error updating entries: %v\n", err)
+			os.Exit(1)
+		}
+		if n == 0 { // deleted by another process since countTaskEntries
+			fmt.Fprintf(os.Stderr, "error: no entries for project %d with task %q\n", *fromProject, *fromTask)
 			os.Exit(1)
 		}
 		fmt.Printf("updated %d entries\n", n)

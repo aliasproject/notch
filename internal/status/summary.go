@@ -10,7 +10,8 @@ import (
 // matching the TUI's own "this week" preset), in the local timezone. Only
 // finished entries count: like "projects"' totalSeconds, a consumer showing
 // a live total adds the running entry's own elapsed time on top, so it can
-// tick locally instead of re-polling.
+// tick locally instead of re-polling -- clipped to local midnight for today
+// and to Monday's for the week, if the entry started before them.
 type Summary struct {
 	TodaySeconds int64 `json:"todaySeconds"`
 	WeekSeconds  int64 `json:"weekSeconds"`
