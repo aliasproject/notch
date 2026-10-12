@@ -92,11 +92,24 @@ notch projects          # list all projects, one per line: "<id>\t<client> › <
 notch projects -json    # same, as JSON: [{"id":1,"name":"Website","clientId":1,"clientName":"Acme","totalSeconds":123}, ...]
 
 notch tasks              # list recently-used (project, task) pairings, most recent first
-notch tasks -json        # same, as JSON: [{"projectId":1,"projectName":"Website","clientName":"Acme","task":"Meeting","totalSeconds":123}, ...]
+notch tasks -json        # same, as JSON: [{"projectId":1,"projectName":"Website","clientName":"Acme","task":"Meeting","totalSeconds":123,"entryCount":4,"invoicedCount":1,"paidCount":0}, ...]
+notch entries --project <id> --task "Meeting" [-json] [--limit 20]  # one task's sessions, newest first, with invoiced/paid
+
+notch summary           # time tracked today and this week (Monday start): "today\t<total>\nweek\t<total>"
+notch summary -json     # same, as JSON: {"todaySeconds":5400,"weekSeconds":28800}
 
 notch start --project <id> [--task "description"] [--notes "notes"]  # stop whatever's running, start a new timer
 notch stop                                                            # stop whatever's running (no-op if idle)
+
+notch edit [--id <n>] [--task "t"] [--client-name c] [--project-name p] [--notes "n"] [--start t] [--end t]  # one entry (default: the running one)
+notch edit --from-project <id> --from-task "t" [--task "new"] [--client-name c] [--project-name p]       # every entry of one task
+
+notch delete                                 # discard the running entry
+notch delete --id <n>                        # delete one entry
+notch delete --project <id> --task "t"       # delete every entry of one task, the running one included
 ```
+
+`summary` counts finished entries only, clipped to local day and week boundaries, so a status bar can add the running entry's elapsed time itself and tick locally. `edit --start/--end` take RFC3339 or local `YYYY-MM-DD HH:MM`, with the same rules as the TUI's edit form (the end can't be before the start), and neither can be in the future; `--notes ""` clears notes. A whole-task `edit` renames and/or moves the task, merging it into an existing one if the result matches. `delete` doesn't prompt: callers confirm first. Edits and deletes that match nothing exit non-zero.
 
 `start` always stops any currently-running entry first, the same as the TUI does — only one timer runs at a time. `--notes` is CLI-only: the TUI's own new-timer form has a Notes field, but doesn't actually persist it for a brand-new entry (only when editing an existing one) — `start --notes` does persist it, via an update right after the entry is created.
 
