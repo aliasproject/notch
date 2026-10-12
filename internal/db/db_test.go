@@ -1092,3 +1092,50 @@ func TestUpdateTaskEntries_RenameMoveAndMerge(t *testing.T) {
 		t.Errorf("unrelated task changed: %v", counts)
 	}
 }
+
+func TestListFinishedEntriesOverlapping(t *testing.T) {
+	d := newTestDB(t)
+	c := mustClient(t, d, "Acme")
+	p, err := d.CreateProject(c.ID, "P")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := func(day, hour int) time.Time { return time.Date(2026, 3, day, hour, 0, 0, 0, time.UTC) }
+	add := func(task string, start time.Time, end *time.Time) {
+		e, err := d.StartEntry(p.ID, task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := d.UpdateEntry(&model.Entry{ID: e.ID, ProjectID: p.ID, Task: task, StartTime: start, EndTime: end}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Window: Mon 2026-03-09 00:00 to Wed 2026-03-11 12:00.
+	from, to := at(9, 0), at(11, 12)
+	add("crosses-start", at(7, 18), ptrTime(at(9, 9))) // Sat evening to Mon morning
+	add("inside", at(10, 9), ptrTime(at(10, 10)))
+	add("before", at(6, 9), ptrTime(at(6, 10)))
+	add("after", at(11, 13), ptrTime(at(11, 14)))
+	add("ends-at-start", at(8, 23), ptrTime(at(9, 0)))
+	add("running", at(10, 11), nil)
+
+	entries, err := d.ListFinishedEntriesOverlapping(from, to)
+	if err != nil {
+		t.Fatalf("ListFinishedEntriesOverlapping: %v", err)
+	}
+	var got []string
+	for _, e := range entries {
+		got = append(got, e.Task)
+	}
+	if want := []string{"inside", "crosses-start"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("tasks = %v, want %v", got, want)
+	}
+}
+
+func TestDeleteEntry_NotFoundError(t *testing.T) {
+	d := newTestDB(t)
+	err := d.DeleteEntry(9999)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("DeleteEntry(missing id) = %v, want a 'not found' error", err)
+	}
+}

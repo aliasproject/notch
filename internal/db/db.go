@@ -272,9 +272,19 @@ func (d *DB) UpdateEntry(e *model.Entry) error {
 	return err
 }
 
+// DeleteEntry deletes one entry, and errors if there's no entry with that
+// ID (say, another process already deleted it).
 func (d *DB) DeleteEntry(id int64) error {
-	_, err := d.sql.Exec(`DELETE FROM entries WHERE id=?`, id)
-	return err
+	res, err := d.sql.Exec(`DELETE FROM entries WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return fmt.Errorf("entry not found: %d", id)
+	}
+	return nil
 }
 
 // DeleteTaskEntries deletes every entry for one (project, task) pairing --
@@ -353,6 +363,30 @@ func (d *DB) ListEntries(projectID int64, dateFrom, dateTo string, includeRunnin
 	}
 	q += ` ORDER BY e.start_time DESC, e.id DESC`
 	rows, err := d.sql.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanEntries(rows)
+}
+
+// ListFinishedEntriesOverlapping returns the finished entries whose time
+// span overlaps [from, to), newest first -- including one that started
+// before from, which ListEntries' start-date filter would miss.
+func (d *DB) ListFinishedEntriesOverlapping(from, to time.Time) ([]*model.Entry, error) {
+	rows, err := d.sql.Query(
+		`SELECT e.id, e.project_id, e.task, e.start_time, e.end_time,
+                e.invoiced, e.paid, e.notes, e.created_at,
+                p.id, p.client_id, p.name, p.created_at,
+                c.id, c.name, c.hourly_rate, c.created_at
+         FROM entries e
+         JOIN projects p ON p.id = e.project_id
+         JOIN clients  c ON c.id = p.client_id
+         WHERE e.end_time IS NOT NULL
+           AND julianday(e.end_time) > julianday(?)
+           AND julianday(e.start_time) < julianday(?)
+         ORDER BY e.start_time DESC, e.id DESC`,
+		from.UTC().Format("2006-01-02 15:04:05"), to.UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		return nil, err
 	}

@@ -145,12 +145,10 @@ func runSummary(args []string) {
 	database := openDBOrExit()
 	defer database.Close()
 
-	// ListEntries filters on the UTC date of start_time, so widen the
-	// range by a day on each side and let Summarize clip to local time.
+	// Everything overlapping this week, including an entry started last
+	// week and stopped in this one; Summarize clips each to the period.
 	now := time.Now()
-	from := status.StartOfWeek(now).AddDate(0, 0, -1).Format("2006-01-02")
-	to := now.AddDate(0, 0, 1).Format("2006-01-02")
-	entries, err := database.ListEntries(0, from, to, false)
+	entries, err := database.ListFinishedEntriesOverlapping(status.StartOfWeek(now), now)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error listing entries: %v\n", err)
 		os.Exit(1)
@@ -362,6 +360,10 @@ func runEntries(args []string) {
 		fmt.Fprintln(os.Stderr, "error: --project is required")
 		os.Exit(1)
 	}
+	if *limit < 1 {
+		fmt.Fprintln(os.Stderr, "error: --limit must be at least 1")
+		os.Exit(1)
+	}
 
 	database := openDBOrExit()
 	defer database.Close()
@@ -544,17 +546,33 @@ func runEdit(args []string) {
 		return id
 	}
 
+	if given["id"] && *entryID <= 0 {
+		fmt.Fprintln(os.Stderr, "error: --id must be a positive entry ID")
+		os.Exit(1)
+	}
+
 	if given["from-project"] || given["from-task"] {
-		if *entryID > 0 {
+		if given["id"] {
 			fmt.Fprintln(os.Stderr, "error: use either --id or --from-project/--from-task, not both")
 			os.Exit(1)
 		}
-		if *fromProject <= 0 {
-			fmt.Fprintln(os.Stderr, "error: --from-task needs --from-project")
+		// Both are required: a blank task is a real pairing, so a missing
+		// --from-task must not silently mean "the blank-task entries".
+		if !given["from-project"] || !given["from-task"] || *fromProject <= 0 {
+			fmt.Fprintln(os.Stderr, "error: --from-project <id> and --from-task <task> go together")
 			os.Exit(1)
 		}
 		if given["start"] || given["end"] || given["notes"] {
 			fmt.Fprintln(os.Stderr, "error: --start/--end/--notes apply to one entry (--id), not a whole task")
+			os.Exit(1)
+		}
+		// Check the pairing exists before resolveProject, which may create
+		// a client and project that a no-op edit would leave behind.
+		if n, err := countTaskEntries(database, *fromProject, *fromTask); err != nil {
+			fmt.Fprintf(os.Stderr, "error listing entries: %v\n", err)
+			os.Exit(1)
+		} else if n == 0 {
+			fmt.Fprintf(os.Stderr, "error: no entries for project %d with task %q\n", *fromProject, *fromTask)
 			os.Exit(1)
 		}
 		toProject := *fromProject
@@ -604,9 +622,6 @@ func runEdit(args []string) {
 		target = entry
 	}
 
-	if id := resolveProject(); id > 0 {
-		target.ProjectID = id
-	}
 	if *task != "" {
 		target.Task = *task
 	}
@@ -642,6 +657,11 @@ func runEdit(args []string) {
 		fmt.Fprintln(os.Stderr, "error: end time must not be before the start time")
 		os.Exit(1)
 	}
+	// Only now: resolveProject may create a client and project, which a
+	// rejected edit would otherwise leave behind.
+	if id := resolveProject(); id > 0 {
+		target.ProjectID = id
+	}
 
 	if err := database.UpdateEntry(target); err != nil {
 		fmt.Fprintf(os.Stderr, "error updating entry: %v\n", err)
@@ -662,19 +682,22 @@ func runDelete(args []string) {
 	task := fs.String("task", "", "with --project: the task description, matched exactly")
 	fs.Parse(args)
 
-	taskSet := false
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "task" {
-			taskSet = true
-		}
-	})
-	if *projectID > 0 || taskSet {
-		if *entryID > 0 {
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+
+	if given["id"] && *entryID <= 0 {
+		fmt.Fprintln(os.Stderr, "error: --id must be a positive entry ID")
+		os.Exit(1)
+	}
+	if given["project"] || given["task"] {
+		if given["id"] {
 			fmt.Fprintln(os.Stderr, "error: use either --id or --project/--task, not both")
 			os.Exit(1)
 		}
-		if *projectID <= 0 {
-			fmt.Fprintln(os.Stderr, "error: --task needs --project")
+		// Both are required: a blank task is a real pairing, so a missing
+		// --task must not silently mean "delete the blank-task entries".
+		if !given["project"] || !given["task"] || *projectID <= 0 {
+			fmt.Fprintln(os.Stderr, "error: --project <id> and --task <task> go together")
 			os.Exit(1)
 		}
 		database := openDBOrExit()
@@ -682,6 +705,10 @@ func runDelete(args []string) {
 		n, err := database.DeleteTaskEntries(*projectID, *task)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error deleting entries: %v\n", err)
+			os.Exit(1)
+		}
+		if n == 0 {
+			fmt.Fprintf(os.Stderr, "error: no entries for project %d with task %q\n", *projectID, *task)
 			os.Exit(1)
 		}
 		fmt.Printf("deleted %d entries\n", n)
@@ -692,7 +719,7 @@ func runDelete(args []string) {
 	defer database.Close()
 
 	id := *entryID
-	if id <= 0 {
+	if !given["id"] {
 		entry, err := database.GetRunningEntry()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error reading running entry: %v\n", err)
@@ -709,6 +736,22 @@ func runDelete(args []string) {
 		fmt.Fprintf(os.Stderr, "error deleting entry: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// countTaskEntries counts one (project, task) pairing's entries, the
+// running one included.
+func countTaskEntries(database *db.DB, projectID int64, task string) (int, error) {
+	entries, err := database.ListEntries(projectID, "", "", true)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if e.Task == task {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // runWatch runs until killed, printing a line to stdout each time an
