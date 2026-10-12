@@ -960,3 +960,182 @@ func TestEnsureUncategorizedProject_ListProjectsError(t *testing.T) {
 		t.Error("want an error when ListProjects fails (projects table missing)")
 	}
 }
+
+func TestDeleteTaskEntries_OnlyThatProjectAndTask(t *testing.T) {
+	d := newTestDB(t)
+	p := mustProject(t, d)
+	other, err := d.CreateProject(p.ClientID, "Other")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+
+	for _, spec := range []struct {
+		projectID int64
+		task      string
+	}{{p.ID, "meeting"}, {p.ID, "meeting"}, {p.ID, "build"}, {other.ID, "meeting"}} {
+		e, err := d.StartEntry(spec.projectID, spec.task)
+		if err != nil {
+			t.Fatalf("StartEntry: %v", err)
+		}
+		if err := d.StopEntry(e.ID); err != nil {
+			t.Fatalf("StopEntry: %v", err)
+		}
+	}
+	// A running entry of the same task goes too.
+	if _, err := d.StartEntry(p.ID, "meeting"); err != nil {
+		t.Fatalf("StartEntry: %v", err)
+	}
+
+	n, err := d.DeleteTaskEntries(p.ID, "meeting")
+	if err != nil {
+		t.Fatalf("DeleteTaskEntries: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("deleted %d entries, want 3", n)
+	}
+
+	left, _ := d.ListEntries(0, "", "", true)
+	if len(left) != 2 {
+		t.Fatalf("entries left = %d, want 2 (build, and meeting on the other project)", len(left))
+	}
+	for _, e := range left {
+		if e.ProjectID == p.ID && e.Task == "meeting" {
+			t.Errorf("entry %d (%s on project %d) should have been deleted", e.ID, e.Task, e.ProjectID)
+		}
+	}
+}
+
+func TestListRecentTasks_BillingCounts(t *testing.T) {
+	d := newTestDB(t)
+	p := mustProject(t, d)
+
+	var ids []int64
+	for i := 0; i < 3; i++ {
+		e, err := d.StartEntry(p.ID, "meeting")
+		if err != nil {
+			t.Fatalf("StartEntry: %v", err)
+		}
+		if err := d.StopEntry(e.ID); err != nil {
+			t.Fatalf("StopEntry: %v", err)
+		}
+		ids = append(ids, e.ID)
+	}
+	if err := d.SetEntryInvoiced(ids[0], true); err != nil {
+		t.Fatalf("SetEntryInvoiced: %v", err)
+	}
+	if err := d.SetEntryInvoiced(ids[1], true); err != nil {
+		t.Fatalf("SetEntryInvoiced: %v", err)
+	}
+	if err := d.SetEntryPaid(ids[1], true); err != nil {
+		t.Fatalf("SetEntryPaid: %v", err)
+	}
+
+	tasks, err := d.ListRecentTasks(10)
+	if err != nil {
+		t.Fatalf("ListRecentTasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %d, want 1", len(tasks))
+	}
+	got := tasks[0]
+	if got.EntryCount != 3 || got.InvoicedCount != 2 || got.PaidCount != 1 {
+		t.Errorf("counts = %d/%d/%d (entries/invoiced/paid), want 3/2/1", got.EntryCount, got.InvoicedCount, got.PaidCount)
+	}
+}
+
+func TestUpdateTaskEntries_RenameMoveAndMerge(t *testing.T) {
+	d := newTestDB(t)
+	p := mustProject(t, d)
+	other, err := d.CreateProject(p.ClientID, "Other")
+	if err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+	finished := func(projectID int64, task string) {
+		t.Helper()
+		e, err := d.StartEntry(projectID, task)
+		if err != nil {
+			t.Fatalf("StartEntry: %v", err)
+		}
+		if err := d.StopEntry(e.ID); err != nil {
+			t.Fatalf("StopEntry: %v", err)
+		}
+	}
+	finished(p.ID, "Appointment View")
+	finished(p.ID, "Appointment View")
+	finished(other.ID, "Appointments View")
+	finished(p.ID, "untouched")
+
+	// Rename + move onto an existing pairing: the two merge.
+	n, err := d.UpdateTaskEntries(p.ID, "Appointment View", other.ID, "Appointments View")
+	if err != nil {
+		t.Fatalf("UpdateTaskEntries: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("updated %d entries, want 2", n)
+	}
+
+	tasks, err := d.ListRecentTasks(10)
+	if err != nil {
+		t.Fatalf("ListRecentTasks: %v", err)
+	}
+	counts := map[string]int{}
+	for _, rt := range tasks {
+		counts[rt.ProjectName+"/"+rt.Task] = rt.EntryCount
+	}
+	if counts["Other/Appointments View"] != 3 {
+		t.Errorf("merged task has %d entries, want 3 (got %v)", counts["Other/Appointments View"], counts)
+	}
+	if _, ok := counts["Website/Appointment View"]; ok {
+		t.Errorf("old pairing should be gone, got %v", counts)
+	}
+	if counts["Website/untouched"] != 1 {
+		t.Errorf("unrelated task changed: %v", counts)
+	}
+}
+
+func TestListFinishedEntriesOverlapping(t *testing.T) {
+	d := newTestDB(t)
+	c := mustClient(t, d, "Acme")
+	p, err := d.CreateProject(c.ID, "P")
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := func(day, hour int) time.Time { return time.Date(2026, 3, day, hour, 0, 0, 0, time.UTC) }
+	add := func(task string, start time.Time, end *time.Time) {
+		e, err := d.StartEntry(p.ID, task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := d.UpdateEntry(&model.Entry{ID: e.ID, ProjectID: p.ID, Task: task, StartTime: start, EndTime: end}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Window: Mon 2026-03-09 00:00 to Wed 2026-03-11 12:00.
+	from, to := at(9, 0), at(11, 12)
+	add("crosses-start", at(7, 18), ptrTime(at(9, 9))) // Sat evening to Mon morning
+	add("inside", at(10, 9), ptrTime(at(10, 10)))
+	add("before", at(6, 9), ptrTime(at(6, 10)))
+	add("after", at(11, 13), ptrTime(at(11, 14)))
+	add("ends-at-start", at(8, 23), ptrTime(at(9, 0)))
+	add("running", at(10, 11), nil)
+
+	entries, err := d.ListFinishedEntriesOverlapping(from, to)
+	if err != nil {
+		t.Fatalf("ListFinishedEntriesOverlapping: %v", err)
+	}
+	var got []string
+	for _, e := range entries {
+		got = append(got, e.Task)
+	}
+	if want := []string{"inside", "crosses-start"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("tasks = %v, want %v", got, want)
+	}
+}
+
+func TestDeleteEntry_NotFoundError(t *testing.T) {
+	d := newTestDB(t)
+	err := d.DeleteEntry(9999)
+	if err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Errorf("DeleteEntry(missing id) = %v, want a 'not found' error", err)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/aliasproject/notch/internal/db"
 	"github.com/aliasproject/notch/internal/model"
@@ -45,6 +46,9 @@ func main() {
 		case "status":
 			runStatus(os.Args[2:])
 			return
+		case "summary":
+			runSummary(os.Args[2:])
+			return
 		case "projects":
 			runProjects(os.Args[2:])
 			return
@@ -62,6 +66,12 @@ func main() {
 			return
 		case "edit":
 			runEdit(os.Args[2:])
+			return
+		case "entries":
+			runEntries(os.Args[2:])
+			return
+		case "delete":
+			runDelete(os.Args[2:])
 			return
 		case "watch":
 			runWatch(os.Args[2:])
@@ -122,6 +132,38 @@ func runStatus(args []string) {
 	} else {
 		fmt.Println(status.FormatText(entry))
 	}
+}
+
+// runSummary prints how much time was tracked today and this week, for
+// status bars that show a running daily total next to the live timer.
+// Only finished entries are counted -- see status.Summary.
+func runSummary(args []string) {
+	fs := flag.NewFlagSet("summary", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "output as JSON")
+	fs.Parse(args)
+
+	database := openDBOrExit()
+	defer database.Close()
+
+	// Everything overlapping this week, including an entry started last
+	// week and stopped in this one; Summarize clips each to the period.
+	now := time.Now()
+	entries, err := database.ListFinishedEntriesOverlapping(status.StartOfWeek(now), now)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error listing entries: %v\n", err)
+		os.Exit(1)
+	}
+
+	s := status.Summarize(entries, now)
+	if *jsonOut {
+		b, err := json.Marshal(s)
+		if err != nil {
+			panic(err) // Summary is a flat struct of ints -- cannot fail
+		}
+		fmt.Println(string(b))
+		return
+	}
+	fmt.Printf("today\t%s\nweek\t%s\n", formatSeconds(s.TodaySeconds), formatSeconds(s.WeekSeconds))
 }
 
 // projectOutput is the JSON shape for the "projects" subcommand, used by
@@ -241,11 +283,14 @@ func formatSeconds(s int64) string {
 // previously-used tasks so a picker can resume "Meeting on Website"
 // instead of just starting a bare project with no task text.
 type taskOutput struct {
-	ProjectID    int64  `json:"projectId"`
-	ProjectName  string `json:"projectName"`
-	ClientName   string `json:"clientName"`
-	Task         string `json:"task"`
-	TotalSeconds int64  `json:"totalSeconds"`
+	ProjectID     int64  `json:"projectId"`
+	ProjectName   string `json:"projectName"`
+	ClientName    string `json:"clientName"`
+	Task          string `json:"task"`
+	TotalSeconds  int64  `json:"totalSeconds"`
+	EntryCount    int    `json:"entryCount"`
+	InvoicedCount int    `json:"invoicedCount"`
+	PaidCount     int    `json:"paidCount"`
 }
 
 // runTasks lists the most recently-used distinct (project, task) pairings,
@@ -271,6 +316,7 @@ func runTasks(args []string) {
 			out[i] = taskOutput{
 				ProjectID: t.ProjectID, ProjectName: t.ProjectName,
 				ClientName: t.ClientName, Task: t.Task, TotalSeconds: t.TotalSeconds,
+				EntryCount: t.EntryCount, InvoicedCount: t.InvoicedCount, PaidCount: t.PaidCount,
 			}
 		}
 		b, err := json.Marshal(out)
@@ -283,6 +329,90 @@ func runTasks(args []string) {
 
 	for _, t := range tasks {
 		fmt.Printf("%s\t%s › %s\t%s\n", t.Task, t.ProjectName, t.ClientName, formatSeconds(t.TotalSeconds))
+	}
+}
+
+// entryOutput is the JSON shape for the "entries" subcommand: one task's
+// individual sessions, for the bar-widget plugin's expandable rows (which
+// delete them one at a time via "delete --id"). EndTime is omitted for the
+// running entry; DurationSeconds is its elapsed time so far.
+type entryOutput struct {
+	ID              int64  `json:"id"`
+	StartTime       string `json:"startTime"`
+	EndTime         string `json:"endTime,omitempty"`
+	DurationSeconds int64  `json:"durationSeconds"`
+	Invoiced        bool   `json:"invoiced"`
+	Paid            bool   `json:"paid"`
+	Notes           string `json:"notes,omitempty"`
+}
+
+// runEntries lists one (project, task) pairing's entries, newest first --
+// the sessions behind a single "tasks" row.
+func runEntries(args []string) {
+	fs := flag.NewFlagSet("entries", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "output as JSON")
+	projectID := fs.Int64("project", 0, "project ID (see 'notch tasks -json')")
+	task := fs.String("task", "", "task description, matched exactly")
+	limit := fs.Int("limit", 20, "max entries to list")
+	fs.Parse(args)
+
+	// --task is required, like delete's: a blank task is a real pairing,
+	// so a forgotten --task must not quietly list the blank-task entries.
+	taskGiven := false
+	fs.Visit(func(f *flag.Flag) { taskGiven = taskGiven || f.Name == "task" })
+	if *projectID <= 0 || !taskGiven {
+		fmt.Fprintln(os.Stderr, "error: --project <id> and --task <task> are required")
+		os.Exit(1)
+	}
+	if *limit < 1 {
+		fmt.Fprintln(os.Stderr, "error: --limit must be at least 1")
+		os.Exit(1)
+	}
+
+	database := openDBOrExit()
+	defer database.Close()
+
+	all, err := database.ListEntries(*projectID, "", "", true)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error listing entries: %v\n", err)
+		os.Exit(1)
+	}
+	var entries []*model.Entry
+	for _, e := range all {
+		if e.Task == *task {
+			entries = append(entries, e)
+			if len(entries) >= *limit {
+				break
+			}
+		}
+	}
+
+	if *jsonOut {
+		out := make([]entryOutput, len(entries))
+		for i, e := range entries {
+			out[i] = entryOutput{
+				ID: e.ID, StartTime: e.StartTime.Format(time.RFC3339),
+				DurationSeconds: int64(e.Duration() / time.Second),
+				Invoiced:        e.Invoiced, Paid: e.Paid, Notes: e.Notes,
+			}
+			if e.EndTime != nil {
+				out[i].EndTime = e.EndTime.Format(time.RFC3339)
+			}
+		}
+		b, err := json.Marshal(out)
+		if err != nil {
+			panic(err) // entryOutput is a flat struct of strings/ints/bools -- cannot fail
+		}
+		fmt.Println(string(b))
+		return
+	}
+
+	for _, e := range entries {
+		end := "running"
+		if e.EndTime != nil {
+			end = e.EndTime.Local().Format("15:04")
+		}
+		fmt.Printf("%d\t%s–%s\t%s\n", e.ID, e.StartTime.Local().Format("2006-01-02 15:04"), end, formatSeconds(int64(e.Duration()/time.Second)))
 	}
 }
 
@@ -374,26 +504,101 @@ func runStop(args []string) {
 	}
 }
 
-// runEdit updates an existing entry's client/project/task/notes -- most
-// often the currently-running one (the default target when --id is
-// omitted), for turning a quick-add's placeholder Uncategorized project
-// into a real one after the fact. Mirrors the TUI's own edit-entry path
-// (internal/ui/views/timers.go's submitEditEntryCmd): resolve-or-create
-// the project the same way (db.ResolveOrCreateProject), then apply only
-// the fields actually given and UpdateEntry. An empty --task/--notes means
-// "leave it as it is", not "clear it" -- there's no way to blank either
-// out through this command.
+// runEdit updates entries, in one of two modes.
+//
+// One entry (--id, or the running entry when --id is omitted): its
+// client/project/task/notes, plus --start/--end times. Mirrors the TUI's
+// own edit-entry path (internal/ui/views/timers.go's submitEditEntryCmd):
+// resolve-or-create the project the same way (db.ResolveOrCreateProject),
+// then apply only the fields actually given and UpdateEntry. An empty
+// --task means "leave it as it is"; --notes given explicitly, even empty,
+// replaces the notes (so --notes "" clears them).
+//
+// A whole task (--from-project with --from-task): renames and/or re-files
+// every entry of that pairing (db.UpdateTaskEntries), merging into an
+// existing pairing if the result matches one. Only --task/--client-name/
+// --project-name apply there; per-entry fields (--start/--end/--notes)
+// are rejected.
 func runEdit(args []string) {
 	fs := flag.NewFlagSet("edit", flag.ExitOnError)
 	entryID := fs.Int64("id", 0, "entry ID to edit (default: the currently-running entry)")
+	fromProject := fs.Int64("from-project", 0, "with --from-task: edit every entry of this project+task instead of one entry")
+	fromTask := fs.String("from-task", "", "with --from-project: the task description, matched exactly")
 	clientName := fs.String("client-name", "", "client name -- resolved to an existing client or created (case-insensitive match)")
 	projectName := fs.String("project-name", "", "project name -- resolved to an existing project or created (case-insensitive match, scoped to the client)")
 	task := fs.String("task", "", "new task description (omit to keep the current one)")
-	notes := fs.String("notes", "", "new notes (omit to keep the current ones)")
+	notes := fs.String("notes", "", "new notes; pass --notes \"\" to clear them")
+	start := fs.String("start", "", "new start time: RFC3339 or local \"YYYY-MM-DD HH:MM\"")
+	end := fs.String("end", "", "new end time (stops a running entry at that time): RFC3339 or local \"YYYY-MM-DD HH:MM\"")
 	fs.Parse(args)
+
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
 
 	database := openDBOrExit()
 	defer database.Close()
+
+	resolveProject := func() int64 {
+		if *clientName == "" && *projectName == "" {
+			return 0
+		}
+		id, err := database.ResolveOrCreateProject(0, *clientName, 0, *projectName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error resolving project: %v\n", err)
+			os.Exit(1)
+		}
+		return id
+	}
+
+	if given["id"] && *entryID <= 0 {
+		fmt.Fprintln(os.Stderr, "error: --id must be a positive entry ID")
+		os.Exit(1)
+	}
+
+	if given["from-project"] || given["from-task"] {
+		if given["id"] {
+			fmt.Fprintln(os.Stderr, "error: use either --id or --from-project/--from-task, not both")
+			os.Exit(1)
+		}
+		// Both are required: a blank task is a real pairing, so a missing
+		// --from-task must not silently mean "the blank-task entries".
+		if !given["from-project"] || !given["from-task"] || *fromProject <= 0 {
+			fmt.Fprintln(os.Stderr, "error: --from-project <id> and --from-task <task> go together")
+			os.Exit(1)
+		}
+		if given["start"] || given["end"] || given["notes"] {
+			fmt.Fprintln(os.Stderr, "error: --start/--end/--notes apply to one entry (--id), not a whole task")
+			os.Exit(1)
+		}
+		// Check the pairing exists before resolveProject, which may create
+		// a client and project that a no-op edit would leave behind.
+		if n, err := countTaskEntries(database, *fromProject, *fromTask); err != nil {
+			fmt.Fprintf(os.Stderr, "error listing entries: %v\n", err)
+			os.Exit(1)
+		} else if n == 0 {
+			fmt.Fprintf(os.Stderr, "error: no entries for project %d with task %q\n", *fromProject, *fromTask)
+			os.Exit(1)
+		}
+		toProject := *fromProject
+		if id := resolveProject(); id > 0 {
+			toProject = id
+		}
+		toTask := *fromTask
+		if *task != "" {
+			toTask = *task
+		}
+		n, err := database.UpdateTaskEntries(*fromProject, *fromTask, toProject, toTask)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error updating entries: %v\n", err)
+			os.Exit(1)
+		}
+		if n == 0 { // deleted by another process since countTaskEntries
+			fmt.Fprintf(os.Stderr, "error: no entries for project %d with task %q\n", *fromProject, *fromTask)
+			os.Exit(1)
+		}
+		fmt.Printf("updated %d entries\n", n)
+		return
+	}
 
 	var target *model.Entry
 	if *entryID > 0 {
@@ -425,27 +630,136 @@ func runEdit(args []string) {
 		target = entry
 	}
 
-	if *clientName != "" || *projectName != "" {
-		resolvedProjectID, err := database.ResolveOrCreateProject(0, *clientName, 0, *projectName)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error resolving project: %v\n", err)
-			os.Exit(1)
-		}
-		if resolvedProjectID > 0 {
-			target.ProjectID = resolvedProjectID
-		}
-	}
 	if *task != "" {
 		target.Task = *task
 	}
-	if *notes != "" {
+	if given["notes"] {
 		target.Notes = *notes
+	}
+
+	// Same rules as the TUI's own edit form (validateTimerForm): end not
+	// before start. Also nothing in the future -- a time tracker records
+	// time already spent.
+	now := time.Now()
+	if given["start"] {
+		t, err := model.ParseEditTime(*start)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: --start: %v\n", err)
+			os.Exit(1)
+		}
+		target.StartTime = t
+	}
+	if given["end"] {
+		t, err := model.ParseEditTime(*end)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: --end: %v\n", err)
+			os.Exit(1)
+		}
+		target.EndTime = &t
+	}
+	if target.StartTime.After(now) || (target.EndTime != nil && target.EndTime.After(now)) {
+		fmt.Fprintln(os.Stderr, "error: times can't be in the future")
+		os.Exit(1)
+	}
+	if target.EndTime != nil && target.EndTime.Before(target.StartTime) {
+		fmt.Fprintln(os.Stderr, "error: end time must not be before the start time")
+		os.Exit(1)
+	}
+	// Only now: resolveProject may create a client and project, which a
+	// rejected edit would otherwise leave behind.
+	if id := resolveProject(); id > 0 {
+		target.ProjectID = id
 	}
 
 	if err := database.UpdateEntry(target); err != nil {
 		fmt.Fprintf(os.Stderr, "error updating entry: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runDelete permanently removes entries: by default the running one, for
+// discarding an accidental start without leaving a stray short entry
+// behind (stop would keep it); --id for one specific entry; or --project
+// with --task for every entry of that pairing (one "tasks" row, running
+// entry included -- see db.DeleteTaskEntries). No confirmation prompt
+// here: callers (the bar-widget plugin) confirm before invoking it.
+func runDelete(args []string) {
+	fs := flag.NewFlagSet("delete", flag.ExitOnError)
+	entryID := fs.Int64("id", 0, "entry ID to delete (default: the currently-running entry)")
+	projectID := fs.Int64("project", 0, "with --task: delete every entry of this project+task")
+	task := fs.String("task", "", "with --project: the task description, matched exactly")
+	fs.Parse(args)
+
+	given := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { given[f.Name] = true })
+
+	if given["id"] && *entryID <= 0 {
+		fmt.Fprintln(os.Stderr, "error: --id must be a positive entry ID")
+		os.Exit(1)
+	}
+	if given["project"] || given["task"] {
+		if given["id"] {
+			fmt.Fprintln(os.Stderr, "error: use either --id or --project/--task, not both")
+			os.Exit(1)
+		}
+		// Both are required: a blank task is a real pairing, so a missing
+		// --task must not silently mean "delete the blank-task entries".
+		if !given["project"] || !given["task"] || *projectID <= 0 {
+			fmt.Fprintln(os.Stderr, "error: --project <id> and --task <task> go together")
+			os.Exit(1)
+		}
+		database := openDBOrExit()
+		defer database.Close()
+		n, err := database.DeleteTaskEntries(*projectID, *task)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error deleting entries: %v\n", err)
+			os.Exit(1)
+		}
+		if n == 0 {
+			fmt.Fprintf(os.Stderr, "error: no entries for project %d with task %q\n", *projectID, *task)
+			os.Exit(1)
+		}
+		fmt.Printf("deleted %d entries\n", n)
+		return
+	}
+
+	database := openDBOrExit()
+	defer database.Close()
+
+	id := *entryID
+	if !given["id"] {
+		entry, err := database.GetRunningEntry()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error reading running entry: %v\n", err)
+			os.Exit(1)
+		}
+		if entry == nil {
+			fmt.Fprintln(os.Stderr, "error: no timer is running -- pass --id <entry> to delete a specific one")
+			os.Exit(1)
+		}
+		id = entry.ID
+	}
+
+	if err := database.DeleteEntry(id); err != nil {
+		fmt.Fprintf(os.Stderr, "error deleting entry: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// countTaskEntries counts one (project, task) pairing's entries, the
+// running one included.
+func countTaskEntries(database *db.DB, projectID int64, task string) (int, error) {
+	entries, err := database.ListEntries(projectID, "", "", true)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if e.Task == task {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // runWatch runs until killed, printing a line to stdout each time an

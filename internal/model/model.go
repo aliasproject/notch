@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -81,4 +82,24 @@ type RecentTask struct {
 	Task         string
 	TotalSeconds int64
 	LastUsed     time.Time
+	// Billing status across the task's finished entries, so a picker can
+	// show "2/3 invoiced" without listing every entry. Paid implies
+	// invoiced, so PaidCount <= InvoicedCount <= EntryCount.
+	EntryCount    int
+	InvoicedCount int
+	PaidCount     int
+}
+
+// ParseEditTime parses a time given on the command line: RFC3339 (what
+// scripts and the bar-widget plugin send) or the TUI's own local
+// "YYYY-MM-DD HH:MM" form.
+func ParseEditTime(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, nil
+	}
+	if t, err := time.ParseInLocation("2006-01-02 15:04", s, time.Local); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("%q is not RFC3339 or YYYY-MM-DD HH:MM", s)
 }

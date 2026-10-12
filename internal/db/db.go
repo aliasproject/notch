@@ -272,9 +272,44 @@ func (d *DB) UpdateEntry(e *model.Entry) error {
 	return err
 }
 
+// DeleteEntry deletes one entry, and errors if there's no entry with that
+// ID (say, another process already deleted it).
 func (d *DB) DeleteEntry(id int64) error {
-	_, err := d.sql.Exec(`DELETE FROM entries WHERE id=?`, id)
-	return err
+	res, err := d.sql.Exec(`DELETE FROM entries WHERE id=?`, id)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return fmt.Errorf("entry not found: %d", id)
+	}
+	return nil
+}
+
+// DeleteTaskEntries deletes every entry for one (project, task) pairing --
+// the same grouping ListRecentTasks reports -- including a running one,
+// and returns how many were removed. Same-named tasks on other projects
+// are a different pairing and are left alone.
+func (d *DB) DeleteTaskEntries(projectID int64, task string) (int64, error) {
+	res, err := d.sql.Exec(`DELETE FROM entries WHERE project_id=? AND task=?`, projectID, task)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+// UpdateTaskEntries re-files every entry of one (project, task) pairing
+// under another -- a rename, a move to a different project, or both --
+// and returns how many entries changed. If the target pairing already
+// has entries, the two simply merge into one ListRecentTasks row.
+func (d *DB) UpdateTaskEntries(fromProjectID int64, fromTask string, toProjectID int64, toTask string) (int64, error) {
+	res, err := d.sql.Exec(`UPDATE entries SET project_id=?, task=? WHERE project_id=? AND task=?`,
+		toProjectID, toTask, fromProjectID, fromTask)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (d *DB) GetRunningEntry() (*model.Entry, error) {
@@ -328,6 +363,30 @@ func (d *DB) ListEntries(projectID int64, dateFrom, dateTo string, includeRunnin
 	}
 	q += ` ORDER BY e.start_time DESC, e.id DESC`
 	rows, err := d.sql.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanEntries(rows)
+}
+
+// ListFinishedEntriesOverlapping returns the finished entries whose time
+// span overlaps [from, to), newest first -- including one that started
+// before from, which ListEntries' start-date filter would miss.
+func (d *DB) ListFinishedEntriesOverlapping(from, to time.Time) ([]*model.Entry, error) {
+	rows, err := d.sql.Query(
+		`SELECT e.id, e.project_id, e.task, e.start_time, e.end_time,
+                e.invoiced, e.paid, e.notes, e.created_at,
+                p.id, p.client_id, p.name, p.created_at,
+                c.id, c.name, c.hourly_rate, c.created_at
+         FROM entries e
+         JOIN projects p ON p.id = e.project_id
+         JOIN clients  c ON c.id = p.client_id
+         WHERE e.end_time IS NOT NULL
+           AND julianday(e.end_time) > julianday(?)
+           AND julianday(e.start_time) < julianday(?)
+         ORDER BY e.start_time DESC, e.id DESC`,
+		from.UTC().Format("2006-01-02 15:04:05"), to.UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		return nil, err
 	}
@@ -403,7 +462,8 @@ func (d *DB) ListRecentTasks(limit int) ([]*model.RecentTask, error) {
 	rows, err := d.sql.Query(
 		`SELECT e.project_id, p.name, c.name, e.task,
                 SUM((JULIANDAY(e.end_time) - JULIANDAY(e.start_time)) * 86400) AS total_seconds,
-                MAX(e.start_time) AS last_used
+                MAX(e.start_time) AS last_used,
+                COUNT(*), SUM(e.invoiced), SUM(e.paid)
          FROM entries e
          JOIN projects p ON p.id = e.project_id
          JOIN clients  c ON c.id = p.client_id
@@ -421,7 +481,8 @@ func (d *DB) ListRecentTasks(limit int) ([]*model.RecentTask, error) {
 		t := &model.RecentTask{}
 		var totalSeconds float64
 		var lastUsed string
-		if err := rows.Scan(&t.ProjectID, &t.ProjectName, &t.ClientName, &t.Task, &totalSeconds, &lastUsed); err != nil {
+		if err := rows.Scan(&t.ProjectID, &t.ProjectName, &t.ClientName, &t.Task, &totalSeconds, &lastUsed,
+			&t.EntryCount, &t.InvoicedCount, &t.PaidCount); err != nil {
 			return nil, err
 		}
 		t.TotalSeconds = int64(totalSeconds)
