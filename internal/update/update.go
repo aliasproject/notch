@@ -312,9 +312,10 @@ func ExecutablePath() (string, error) {
 // Both accept an optional leading "v". Versions are compared numerically
 // per dot-separated component; a pre-release suffix ("-rc1") sorts before
 // the plain release with the same numbers, pre-releases compare by semver
-// precedence ("rc.2" < "rc.10"), and build metadata ("+linux") is ignored. An unparseable current version
-// (e.g. "dev") is never considered up to date, so callers should treat
-// that case separately — see Comparable.
+// precedence ("rc.2" < "rc.10"), and build metadata ("+linux") is
+// ignored. An unparseable current version (e.g. "dev") is never
+// considered up to date, so callers should treat that case separately —
+// see Comparable.
 func IsNewer(current, latest string) bool {
 	return compare(current, latest) < 0
 }

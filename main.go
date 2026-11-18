@@ -797,20 +797,18 @@ func runWatch(args []string) {
 // pseudoVersion matches the versions Go synthesizes for a commit that
 // isn't at a tag: "v0.0.0-20260901231814-8e1a4ff10cc0",
 // "v0.7.2-0.20260901231814-8e1a4ff10cc0" after a release tag, or
-// "v0.8.0-rc.1.0.20260901231814-8e1a4ff10cc0" after a pre-release one,
-// plus the "+dirty" Go appends for uncommitted changes. Those aren't
-// releases, so they're reported as "dev" rather than compared against
-// GitHub.
-var pseudoVersion = regexp.MustCompile(`[-.]\d{14}-[0-9a-f]{12}|\+dirty$`)
+// "v0.8.0-rc.1.0.20260901231814-8e1a4ff10cc0" after a pre-release one.
+// "go install ...@main" downloads one of those, which isn't a release, so
+// it's reported as "dev" rather than compared against GitHub. (Local
+// builds, dirty or not, are already "dev" because they have no go.sum
+// hash; see resolveVersion.)
+var pseudoVersion = regexp.MustCompile(`[-.]\d{14}-[0-9a-f]{12}$`)
 
 // currentVersion is the running binary's version: the goreleaser-stamped
 // one if present, else the module version Go recorded for a module it
 // fetched ("go install ...@vX.Y.Z"), else "dev" for any local build.
 func currentVersion() string {
-	bi, ok := debug.ReadBuildInfo()
-	if !ok {
-		bi = nil
-	}
+	bi, _ := debug.ReadBuildInfo() // nil when unavailable
 	return resolveVersion(version, bi)
 }
 

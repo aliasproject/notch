@@ -41,6 +41,11 @@ func TestIsNewer(t *testing.T) {
 		{"v0.8.0+linux", "v0.8.0", false},
 		{"v0.8.0", "v0.8.0+linux", false},
 		{"v0.8.0-rc.1+meta", "v0.8.0", true},
+		{"v1.0.0+build-5", "v1.0.0", false},
+		{"v1.0.0", "v1.0.0+build-5", false},
+		{"v0.8.0-alpha", "v0.8.0-1", false},
+		{"v0.8.0-rc.1", "v0.8.0-rc.a", true},
+		{"v0.8.0-rc.a", "v0.8.0-rc.1", false},
 	}
 	for _, tc := range cases {
 		if got := IsNewer(tc.current, tc.latest); got != tc.want {
@@ -51,7 +56,7 @@ func TestIsNewer(t *testing.T) {
 
 func TestComparable(t *testing.T) {
 	for v, want := range map[string]bool{
-		"v0.7.1": true, "0.7.1": true, "v1": true,
+		"v0.7.1": true, "0.7.1": true, "v1": true, "v1.0.0+build-5": true,
 		"dev": false, "(devel)": false, "": false, "v0.x": false,
 	} {
 		if got := Comparable(v); got != want {
