@@ -879,8 +879,9 @@ func buildDetails() []string {
 }
 
 // buildSource names where this binary came from: "release" for a
-// goreleaser-stamped build, "go install" for a module build whose version
-// Go recorded at build time, and "dev" for a plain "go build" of a checkout.
+// goreleaser-stamped build, "go install" for a tagged release Go
+// downloaded ("go install ...@vX.Y.Z"), and "dev" for anything else: a
+// build of a checkout, or "go install ...@main" (a pseudo-version).
 // Only "release" builds are guaranteed to have a matching GitHub asset for
 // "notch upgrade" to swap in.
 func buildSource() string {
