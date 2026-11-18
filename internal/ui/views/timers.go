@@ -499,7 +499,13 @@ func (m TimersModel) filteredTotals() (time.Duration, float64) {
 // friendlyDay formats a local calendar day as "Today", "Yesterday", or
 // "Mon, Jan 2".
 func friendlyDay(t time.Time) string {
-	now := time.Now().Local()
+	return friendlyDayAt(t, time.Now())
+}
+
+// friendlyDayAt is friendlyDay relative to now instead of the wall clock,
+// so tests can pin "today" rather than racing midnight.
+func friendlyDayAt(t, now time.Time) string {
+	now = now.Local()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
 	switch {
@@ -1598,6 +1604,18 @@ func (m TimersModel) viewList() string {
 			base.Width(tColDuration).Align(lipgloss.Right).Render(dur)+
 			statusCell+
 			base.Width(tColEarned).Align(lipgloss.Right).Render(earned))
+	}
+
+	// Scrolled to the very bottom with the last day's header at the top of
+	// the window, no sticky header is synthesized but windowEnd still runs
+	// out of lines, leaving the window one row short of the budget. Pad it
+	// with blank rows so the table keeps the same height while scrolling.
+	// (A list that fits without scrolling just renders at its natural height.)
+	if len(lines) > budget {
+		blank := RowPrefix(false) + lipgloss.NewStyle().Background(cBg).Render(strings.Repeat(" ", contentW))
+		for rows := len(out) - 2; rows < budget; rows++ {
+			out = append(out, blank)
+		}
 	}
 
 	out = append(out, m.renderFooterTotals(contentW)...)
