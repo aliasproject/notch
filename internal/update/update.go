@@ -311,7 +311,8 @@ func ExecutablePath() (string, error) {
 // IsNewer reports whether latest is a strictly newer version than current.
 // Both accept an optional leading "v". Versions are compared numerically
 // per dot-separated component; a pre-release suffix ("-rc1") sorts before
-// the plain release with the same numbers. An unparseable current version
+// the plain release with the same numbers, pre-releases compare by semver
+// precedence ("rc.2" < "rc.10"), and build metadata ("+linux") is ignored. An unparseable current version
 // (e.g. "dev") is never considered up to date, so callers should treat
 // that case separately — see Comparable.
 func IsNewer(current, latest string) bool {
@@ -344,20 +345,61 @@ func compare(a, b string) int {
 		}
 	}
 	switch {
-	case apre == "" && bpre != "":
+	case apre == "" && bpre == "":
+		return 0
+	case apre == "":
 		return 1
-	case apre != "" && bpre == "":
+	case bpre == "":
 		return -1
 	}
-	return strings.Compare(apre, bpre)
+	return comparePre(apre, bpre)
 }
 
-// parse splits "v1.2.3-rc1" into [1 2 3] and "rc1". It returns no numbers
-// at all if any component isn't an integer.
+// comparePre orders two pre-release strings by semver precedence: each
+// dot-separated identifier is compared in turn, numeric ones numerically
+// and below alphanumeric ones, and a shorter list of otherwise equal
+// identifiers sorts first ("rc" < "rc.1").
+func comparePre(a, b string) int {
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		x, xerr := strconv.Atoi(as[i])
+		y, yerr := strconv.Atoi(bs[i])
+		switch {
+		case xerr == nil && yerr == nil:
+			if x != y {
+				if x < y {
+					return -1
+				}
+				return 1
+			}
+		case xerr == nil:
+			return -1
+		case yerr == nil:
+			return 1
+		default:
+			if c := strings.Compare(as[i], bs[i]); c != 0 {
+				return c
+			}
+		}
+	}
+	switch {
+	case len(as) < len(bs):
+		return -1
+	case len(as) > len(bs):
+		return 1
+	}
+	return 0
+}
+
+// parse splits "v1.2.3-rc1+meta" into [1 2 3] and "rc1", dropping build
+// metadata. It returns no numbers at all if any component isn't an integer.
 func parse(v string) ([]int, string) {
 	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	if i := strings.IndexByte(v, '+'); i >= 0 {
+		v = v[:i]
+	}
 	pre := ""
-	if i := strings.IndexAny(v, "-+"); i >= 0 {
+	if i := strings.IndexByte(v, '-'); i >= 0 {
 		pre = v[i+1:]
 		v = v[:i]
 	}

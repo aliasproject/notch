@@ -33,6 +33,14 @@ func TestIsNewer(t *testing.T) {
 		{"v0.8.0", "v0.8.0-rc1", false},
 		{"v0.8.0-rc1", "v0.8.0-rc2", true},
 		{"v0.9.0", "v0.10.0", true},
+		{"v0.8.0-rc.2", "v0.8.0-rc.10", true},
+		{"v0.8.0-rc.10", "v0.8.0-rc.2", false},
+		{"v0.8.0-rc", "v0.8.0-rc.1", true},
+		{"v0.8.0-1", "v0.8.0-alpha", true},
+		{"v0.8.0-beta", "v0.8.0-alpha", false},
+		{"v0.8.0+linux", "v0.8.0", false},
+		{"v0.8.0", "v0.8.0+linux", false},
+		{"v0.8.0-rc.1+meta", "v0.8.0", true},
 	}
 	for _, tc := range cases {
 		if got := IsNewer(tc.current, tc.latest); got != tc.want {

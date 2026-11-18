@@ -24,7 +24,8 @@ import (
 // Build metadata, stamped by goreleaser via -ldflags "-X main.version=..."
 // (see .goreleaser.yaml). A plain "go build" leaves them at these defaults;
 // currentVersion falls back to Go's module build info in that case so a
-// "go install github.com/aliasproject/notch@v0.7.1" still reports v0.7.1.
+// "go install github.com/aliasproject/notch@v0.7.1" still reports v0.7.1,
+// while a build of a local checkout reports "dev".
 var (
 	version = "dev"
 	commit  = ""
@@ -793,27 +794,45 @@ func runWatch(args []string) {
 	}
 }
 
-// pseudoVersion matches the versions Go synthesizes for a checkout that
-// isn't at a tag, e.g. "v0.7.2-0.20260901231814-8e1a4ff10cc0+dirty". Those
-// are local builds, not releases, so they're reported as "dev" rather than
-// compared against GitHub.
-var pseudoVersion = regexp.MustCompile(`-\d{14}-[0-9a-f]{12}|\+dirty$`)
+// pseudoVersion matches the versions Go synthesizes for a commit that
+// isn't at a tag: "v0.0.0-20260901231814-8e1a4ff10cc0",
+// "v0.7.2-0.20260901231814-8e1a4ff10cc0" after a release tag, or
+// "v0.8.0-rc.1.0.20260901231814-8e1a4ff10cc0" after a pre-release one,
+// plus the "+dirty" Go appends for uncommitted changes. Those aren't
+// releases, so they're reported as "dev" rather than compared against
+// GitHub.
+var pseudoVersion = regexp.MustCompile(`[-.]\d{14}-[0-9a-f]{12}|\+dirty$`)
 
 // currentVersion is the running binary's version: the goreleaser-stamped
-// one if present, else the module version Go recorded at build time (a
-// real tag for "go install ...@vX.Y.Z"; "dev" for any local checkout).
+// one if present, else the module version Go recorded for a module it
+// fetched ("go install ...@vX.Y.Z"), else "dev" for any local build.
 func currentVersion() string {
-	if version != "dev" {
-		return version
-	}
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
-		return version
+		bi = nil
 	}
-	if v := bi.Main.Version; v != "" && v != "(devel)" && !pseudoVersion.MatchString(v) {
-		return v
+	return resolveVersion(version, bi)
+}
+
+// resolveVersion is currentVersion's logic, split out so tests can feed it
+// build info. Since Go 1.24, "go build" in a checkout also stamps a module
+// version, taken from the VCS tag, so a clean checkout of v0.10.0 would
+// otherwise claim to be the v0.10.0 release (and "notch upgrade" would call
+// it up to date). Only a module Go downloaded has a go.sum hash in
+// bi.Main.Sum, so that's the signal that the version names a published
+// release rather than a checkout.
+func resolveVersion(stamped string, bi *debug.BuildInfo) string {
+	if stamped != "dev" {
+		return stamped
 	}
-	return version
+	if bi == nil {
+		return "dev"
+	}
+	m := bi.Main
+	if m.Sum == "" || m.Version == "" || m.Version == "(devel)" || pseudoVersion.MatchString(m.Version) {
+		return "dev"
+	}
+	return m.Version
 }
 
 // buildDetails is the "(commit, date)" part of the version line. Stamped
