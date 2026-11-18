@@ -667,7 +667,7 @@ func TestFriendlyDay(t *testing.T) {
 	if got := friendlyDayAt(today, now); got != "Today" {
 		t.Errorf("friendlyDay(today) = %q, want %q", got, "Today")
 	}
-	if got := friendlyDayAt(today.Add(23*time.Hour), now); got != "Today" {
+	if got := friendlyDayAt(time.Date(2024, 5, 10, 23, 59, 59, 0, time.Local), now); got != "Today" {
 		t.Errorf("friendlyDay(late today) = %q, want %q", got, "Today")
 	}
 	if got := friendlyDayAt(today.Add(-time.Second), now); got != "Yesterday" {
@@ -2245,25 +2245,27 @@ func TestViewList_HeightStaysConstantAcrossStickyHeaderBoundary(t *testing.T) {
 	p := mkProject(1, "Web", c)
 
 	for hour := 0; hour < 24; hour++ {
-		base := time.Date(2024, 5, 10, hour, 30, 0, 0, time.Local)
-		var entries []*model.Entry
-		for i := 0; i < 20; i++ {
-			entries = append(entries, mkEntry(int64(i+1), p, fmt.Sprintf("t-%d", i), base.Add(-time.Duration(i)*time.Hour), 10))
-		}
-
-		m := TimersModel{width: 100, height: 15, entries: entries}
-		m.recomputeFiltered()
-
-		var heights []int
-		for cursor := 0; cursor < len(entries); cursor++ {
-			m.cursor = cursor
-			heights = append(heights, lipgloss.Height(m.viewList()))
-		}
-		for i, h := range heights {
-			if h != heights[0] {
-				t.Errorf("first entry at %02d:30, cursor=%d: viewList() height = %d, want %d (same as cursor=0) — table should never grow/shrink while scrolling", hour, i, h, heights[0])
+		t.Run(fmt.Sprintf("%02d:30", hour), func(t *testing.T) {
+			base := time.Date(2024, 5, 10, hour, 30, 0, 0, time.Local)
+			var entries []*model.Entry
+			for i := 0; i < 20; i++ {
+				entries = append(entries, mkEntry(int64(i+1), p, fmt.Sprintf("t-%d", i), base.Add(-time.Duration(i)*time.Hour), 10))
 			}
-		}
+
+			m := TimersModel{width: 100, height: 15, entries: entries}
+			m.recomputeFiltered()
+
+			var heights []int
+			for cursor := 0; cursor < len(entries); cursor++ {
+				m.cursor = cursor
+				heights = append(heights, lipgloss.Height(m.viewList()))
+			}
+			for i, h := range heights {
+				if h != heights[0] {
+					t.Errorf("cursor=%d: viewList() height = %d, want %d (same as cursor=0) — table should never grow/shrink while scrolling", i, h, heights[0])
+				}
+			}
+		})
 	}
 }
 
@@ -2594,9 +2596,10 @@ func TestRangeLabel_UnparseableCustomDate(t *testing.T) {
 }
 
 func TestRangeLabel_CustomRangeIncludingToday(t *testing.T) {
-	today := time.Now().Local().Format("2006-01-02")
+	now := time.Date(2024, 5, 10, 23, 59, 59, 0, time.Local)
+	today := now.Format("2006-01-02")
 	m := TimersModel{preset: timersPresetCustom, dateFrom: today, dateTo: "2020-01-01"}
-	got := m.rangeLabel()
+	got := m.rangeLabelAt(now)
 	if !strings.Contains(got, "Today") {
 		t.Errorf("rangeLabel() with dateFrom==today = %q, want it to say 'Today'", got)
 	}

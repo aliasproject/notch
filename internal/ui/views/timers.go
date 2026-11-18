@@ -1411,6 +1411,12 @@ func (m TimersModel) renderHeader() string {
 // custom range — where the specific dates ARE the point — is described by
 // its actual from/to dates.
 func (m TimersModel) rangeLabel() string {
+	return m.rangeLabelAt(time.Now())
+}
+
+// rangeLabelAt is rangeLabel with "today" taken from now, so tests don't
+// race midnight.
+func (m TimersModel) rangeLabelAt(now time.Time) string {
 	switch m.preset {
 	case timersPresetToday:
 		return "Today"
@@ -1431,7 +1437,7 @@ func (m TimersModel) rangeLabel() string {
 		if !ok {
 			return "—"
 		}
-		friendly := friendlyDay(t)
+		friendly := friendlyDayAt(t, now)
 		if friendly == "Today" || friendly == "Yesterday" {
 			return friendly
 		}
@@ -1516,6 +1522,7 @@ func (m TimersModel) viewList() string {
 		runes[divW-1] = '▼'
 	}
 	out = append(out, StyleTableDiv.Render(string(runes)))
+	chromeLines := len(out) // column titles + divider, not table rows
 
 	// Sticky day header: if the window's top row continues a day whose real
 	// header line scrolled off above, synthesize a copy of it here so you
@@ -1613,7 +1620,7 @@ func (m TimersModel) viewList() string {
 	// (A list that fits without scrolling just renders at its natural height.)
 	if len(lines) > budget {
 		blank := RowPrefix(false) + lipgloss.NewStyle().Background(cBg).Render(strings.Repeat(" ", contentW))
-		for rows := len(out) - 2; rows < budget; rows++ {
+		for rows := len(out) - chromeLines; rows < budget; rows++ {
 			out = append(out, blank)
 		}
 	}
