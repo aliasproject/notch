@@ -658,17 +658,26 @@ func TestSelectedEntry_OutOfBounds(t *testing.T) {
 }
 
 func TestFriendlyDay(t *testing.T) {
-	now := time.Now().Local()
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	// A fixed "now" just after midnight: the old version read the wall
+	// clock separately from friendlyDay, so a run straddling midnight
+	// compared against two different days.
+	now := time.Date(2024, 5, 10, 0, 0, 1, 0, time.Local)
+	today := time.Date(2024, 5, 10, 0, 0, 0, 0, time.Local)
 
-	if got := friendlyDay(today); got != "Today" {
+	if got := friendlyDayAt(today, now); got != "Today" {
 		t.Errorf("friendlyDay(today) = %q, want %q", got, "Today")
 	}
-	if got := friendlyDay(today.AddDate(0, 0, -1)); got != "Yesterday" {
+	if got := friendlyDayAt(time.Date(2024, 5, 10, 23, 59, 59, 0, time.Local), now); got != "Today" {
+		t.Errorf("friendlyDay(late today) = %q, want %q", got, "Today")
+	}
+	if got := friendlyDayAt(today.Add(-time.Second), now); got != "Yesterday" {
+		t.Errorf("friendlyDay(just before midnight) = %q, want %q", got, "Yesterday")
+	}
+	if got := friendlyDayAt(today.AddDate(0, 0, -1), now); got != "Yesterday" {
 		t.Errorf("friendlyDay(yesterday) = %q, want %q", got, "Yesterday")
 	}
 	older := today.AddDate(0, 0, -10)
-	if got := friendlyDay(older); got != older.Format("Mon, Jan 2") {
+	if got := friendlyDayAt(older, now); got != older.Format("Mon, Jan 2") {
 		t.Errorf("friendlyDay(10 days ago) = %q, want %q", got, older.Format("Mon, Jan 2"))
 	}
 }
@@ -2172,15 +2181,18 @@ func TestClampOffset(t *testing.T) {
 // scrolled off, so it should stay visible for every cursor position within
 // a group, switching only once the cursor crosses into the next group.
 //
-// Entries are placed >1 day in the past so friendlyDay returns "Mon, Jan
+// Entries are on fixed past dates so friendlyDay returns "Mon, Jan
 // 2"-style labels instead of "Today"/"Yesterday" — the latter would also
 // match the unrelated "Timers · Today" range-label in the title (m.preset
-// defaults to timersPresetToday), making a text search ambiguous.
+// defaults to timersPresetToday), making a text search ambiguous. dayA is
+// pinned late in the day so all eight hourly entries stay on it; deriving
+// it from time.Now() spilled entries into dayB whenever the suite ran
+// before about 07:00 local time.
 func TestViewList_DayHeaderStaysStickyWhileScrolling(t *testing.T) {
 	c := mkClient(1, "Acme", 0)
 	p := mkProject(1, "Web", c)
 
-	dayA := time.Now().AddDate(0, 0, -10)
+	dayA := time.Date(2024, 5, 10, 20, 0, 0, 0, time.Local)
 	dayB := dayA.AddDate(0, 0, -1)
 	labelA := friendlyDay(dayA)
 	labelB := friendlyDay(dayB)
@@ -2223,28 +2235,37 @@ func TestViewList_DayHeaderStaysStickyWhileScrolling(t *testing.T) {
 // table visibly grew by a row as soon as you scrolled one row past a day
 // boundary, then shrank back. Rendered height must stay constant no matter
 // which row the window happens to start on.
+//
+// Where the day boundary falls among the 20 hourly entries depends on the
+// first entry's hour, so every hour of the day is checked against fixed
+// dates rather than whatever time.Now() happened to be (which made this
+// fail only when the suite ran at certain times of day).
 func TestViewList_HeightStaysConstantAcrossStickyHeaderBoundary(t *testing.T) {
 	c := mkClient(1, "Acme", 0)
 	p := mkProject(1, "Web", c)
 
-	base := time.Now().AddDate(0, 0, -10)
-	var entries []*model.Entry
-	for i := 0; i < 20; i++ {
-		entries = append(entries, mkEntry(int64(i+1), p, fmt.Sprintf("t-%d", i), base.Add(-time.Duration(i)*time.Hour), 10))
-	}
+	for hour := 0; hour < 24; hour++ {
+		t.Run(fmt.Sprintf("%02d:30", hour), func(t *testing.T) {
+			base := time.Date(2024, 5, 10, hour, 30, 0, 0, time.Local)
+			var entries []*model.Entry
+			for i := 0; i < 20; i++ {
+				entries = append(entries, mkEntry(int64(i+1), p, fmt.Sprintf("t-%d", i), base.Add(-time.Duration(i)*time.Hour), 10))
+			}
 
-	m := TimersModel{width: 100, height: 15, entries: entries}
-	m.recomputeFiltered()
+			m := TimersModel{width: 100, height: 15, entries: entries}
+			m.recomputeFiltered()
 
-	var heights []int
-	for cursor := 0; cursor < len(entries); cursor++ {
-		m.cursor = cursor
-		heights = append(heights, lipgloss.Height(m.viewList()))
-	}
-	for i, h := range heights {
-		if h != heights[0] {
-			t.Errorf("cursor=%d: viewList() height = %d, want %d (same as cursor=0) — table should never grow/shrink while scrolling", i, h, heights[0])
-		}
+			var heights []int
+			for cursor := 0; cursor < len(entries); cursor++ {
+				m.cursor = cursor
+				heights = append(heights, lipgloss.Height(m.viewList()))
+			}
+			for i, h := range heights {
+				if h != heights[0] {
+					t.Errorf("cursor=%d: viewList() height = %d, want %d (same as cursor=0) — table should never grow/shrink while scrolling", i, h, heights[0])
+				}
+			}
+		})
 	}
 }
 
@@ -2575,9 +2596,10 @@ func TestRangeLabel_UnparseableCustomDate(t *testing.T) {
 }
 
 func TestRangeLabel_CustomRangeIncludingToday(t *testing.T) {
-	today := time.Now().Local().Format("2006-01-02")
+	now := time.Date(2024, 5, 10, 23, 59, 59, 0, time.Local)
+	today := now.Format("2006-01-02")
 	m := TimersModel{preset: timersPresetCustom, dateFrom: today, dateTo: "2020-01-01"}
-	got := m.rangeLabel()
+	got := m.rangeLabelAt(now)
 	if !strings.Contains(got, "Today") {
 		t.Errorf("rangeLabel() with dateFrom==today = %q, want it to say 'Today'", got)
 	}
